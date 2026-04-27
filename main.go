@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -26,9 +24,8 @@ import (
 )
 
 const (
-	defaultBaseURL = "https://hive.ethpandaops.io"
-	timeFormat     = "2006-01-02, 15:04:05"
-	version        = "1.0"
+	timeFormat = "2006-01-02, 15:04:05"
+	version    = "1.0"
 )
 
 func formatTime(t time.Time) string {
@@ -58,6 +55,10 @@ func run(args []string) error {
 	switch cmd {
 	case "groups":
 		return cmdGroups(args)
+	case "suites":
+		return cmdSuites(args)
+	case "clients":
+		return cmdClients(args)
 	case "list":
 		return cmdList(args)
 	case "fetch":
@@ -74,32 +75,27 @@ func printUsage(w io.Writer) {
 Usage:
   --version
       Print the current version.
-  groups
-      List all result groups (e.g. generic, bal) with their website URL and the latest run timestamp.
-  groups GROUP [--client go-ethereum] [--all] [--files] [--limit N]
+  groups [--json]
+      List all result groups with their website URL and the latest run timestamp.
+  suites [--json]
+      List all suites across result groups with the latest run timestamp.
+  clients [--json]
+      List known client names (offline; from compiled-in list).
+  groups GROUP [--client NAME] [--all] [--files] [--limit N] [--json]
       Print the latest matching Hive runs grouped by suite, then client.
-      Use --all to include older runs and --files to print values for --run-file.
-  groups GROUP SUITE
-      Show per-client pass/fail counts, run start, and duration for the latest SUITE run in GROUP.
-  list  --group generic --suite eels/consume-engine --client go-ethereum [--test TEXT]
+      --all includes older runs; --files prints run file names for --run-file.
+  groups GROUP SUITE [--json]
+      Per-client pass/fail counts, run start, and duration for the latest SUITE run in GROUP.
+  groups GROUP SUITE CLIENT [--json]
+      List CLIENT's failing tests in the latest SUITE run and download
+      hive.log + <CLIENT>.log bundles for each into ./logs.
+  list --suite NAME --client NAME [--group NAME] [--test TEXT] [--regex]
+       [--status fail|pass|all] [--limit N] [--run-file FILE] [--json]
       List tests from the latest matching run with pass/fail status and log availability.
-  fetch --group generic --suite eels/consume-engine --client go-ethereum --test TEXT [--out logs]
-      Download hive.log + client.log bundles for matching failing tests into --out.
-
-Common flags:
-  --base-url URL    Hive results origin (default: https://hive.ethpandaops.io)
-  --group NAME      Result group, usually generic
-  --suite NAME      Hive suite/simulator name, e.g. eels/consume-engine, rpc-compat, engine-api
-  --client NAME     Client name, e.g. go-ethereum, reth, besu, nethermind, erigon
-  --test TEXT       Case-insensitive text matched against the Hive test name
-  --regex           Treat --test as a case-insensitive regular expression
-  --json            Emit JSON instead of a table/status text
-  --run-file FILE   Use a specific result JSON from groups GROUP --all --files instead of latest matching run
-
-Fetch flags:
-  --out DIR         Directory for log bundles (default: logs)
-  --limit N         Maximum matching failures to fetch (default: 1, use 0 for all)
-  --full-client-log Fetch full client log files instead of per-test byte ranges
+  fetch --suite NAME --client NAME --test TEXT [--group NAME] [--regex]
+        [--out DIR] [--limit N] [--full-client-log] [--include-pass]
+        [--run-file FILE] [--json]
+      Download hive.log + <CLIENT>.log bundles for matching failing tests into --out.
 `)
 }
 
@@ -269,7 +265,7 @@ type commonFlags struct {
 
 func addCommonFlags(fs *flag.FlagSet, cf *commonFlags) {
 	fs.StringVar(&cf.baseURL, "base-url", defaultBaseURL, "Hive results origin")
-	fs.StringVar(&cf.group, "group", "generic", "result group")
+	fs.StringVar(&cf.group, "group", defaultGroup, "result group")
 	fs.StringVar(&cf.suite, "suite", "", "suite/simulator name")
 	fs.StringVar(&cf.client, "client", "", "client name")
 	fs.StringVar(&cf.test, "test", "", "case-insensitive text matched against test names")
@@ -379,14 +375,17 @@ func cmdGroups(args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(rest) > 2 {
-		return fmt.Errorf("too many positional arguments for groups: %s", strings.Join(rest[2:], " "))
+	if len(rest) > 3 {
+		return fmt.Errorf("too many positional arguments for groups: %s", strings.Join(rest[3:], " "))
 	}
 
 	ctx := context.Background()
 	client := newClient(gf.baseURL)
 
 	if len(rest) > 0 {
+		if len(rest) == 3 {
+			return fetchSuiteClientFailures(ctx, client, rest[0], rest[1], rest[2], gf.json)
+		}
 		if len(rest) == 2 {
 			return listSuiteClients(ctx, client, rest[0], rest[1], gf.json)
 		}
@@ -404,7 +403,7 @@ func cmdGroups(args []string) error {
 	for i, g := range groups {
 		summaries[i] = GroupSummary{
 			Name: g.Name,
-			URL:  fmt.Sprintf("%s/#/group/%s", base, url.PathEscape(g.Name)),
+			URL:  fmt.Sprintf(hiveGroupURLFormat, base, url.PathEscape(g.Name)),
 		}
 		wg.Add(1)
 		go func(i int, name string) {
@@ -442,6 +441,103 @@ type GroupSummary struct {
 	Name   string    `json:"name"`
 	URL    string    `json:"url"`
 	Latest time.Time `json:"latest"`
+}
+
+type SuiteSummary struct {
+	Suite  string    `json:"suite"`
+	Group  string    `json:"group"`
+	Latest time.Time `json:"latest"`
+}
+
+func cmdSuites(args []string) error {
+	var baseURL string
+	var jsonOut bool
+	fs := flag.NewFlagSet("suites", flag.ExitOnError)
+	fs.StringVar(&baseURL, "base-url", defaultBaseURL, "Hive results origin")
+	fs.BoolVar(&jsonOut, "json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected arguments for suites: %s", strings.Join(fs.Args(), " "))
+	}
+
+	ctx := context.Background()
+	client := newClient(baseURL)
+	groups, err := fetchGroups(ctx, client)
+	if err != nil {
+		return err
+	}
+
+	var (
+		mu      sync.Mutex
+		entries []SuiteSummary
+		wg      sync.WaitGroup
+	)
+	for _, g := range groups {
+		wg.Add(1)
+		go func(group string) {
+			defer wg.Done()
+			runs, err := fetchListing(ctx, client, group)
+			if err != nil {
+				return
+			}
+			latest := make(map[string]time.Time)
+			for _, r := range runs {
+				if r.Start.After(latest[r.Name]) {
+					latest[r.Name] = r.Start
+				}
+			}
+			mu.Lock()
+			for suite, ts := range latest {
+				entries = append(entries, SuiteSummary{Suite: suite, Group: group, Latest: ts})
+			}
+			mu.Unlock()
+		}(g.Name)
+	}
+	wg.Wait()
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Group != entries[j].Group {
+			return entries[i].Group < entries[j].Group
+		}
+		return entries[i].Suite < entries[j].Suite
+	})
+
+	if jsonOut {
+		return writePrettyJSON(os.Stdout, entries)
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "SUITE\tGROUP\tLATEST")
+	for _, e := range entries {
+		latest := ""
+		if !e.Latest.IsZero() {
+			latest = formatTime(e.Latest)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\n", e.Suite, e.Group, latest)
+	}
+	return w.Flush()
+}
+
+func cmdClients(args []string) error {
+	var jsonOut bool
+	fs := flag.NewFlagSet("clients", flag.ExitOnError)
+	fs.BoolVar(&jsonOut, "json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected arguments for clients: %s", strings.Join(fs.Args(), " "))
+	}
+
+	if jsonOut {
+		return writePrettyJSON(os.Stdout, hiveKnownClients)
+	}
+	for _, c := range hiveKnownClients {
+		fmt.Println(c)
+	}
+	return nil
 }
 
 type SuiteClientSummary struct {
@@ -524,6 +620,79 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 		)
 	}
 	w.flush()
+	return nil
+}
+
+func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite, clientName string, jsonOut bool) error {
+	runs, err := fetchListing(ctx, client, group)
+	if err != nil {
+		return err
+	}
+	matches := filterRuns(runs, suite, clientName, "latest")
+	if len(matches) == 0 {
+		return fmt.Errorf("no run found for group=%s suite=%s client=%s", group, suite, clientName)
+	}
+	sortRunsNewestFirst(matches)
+	run := matches[0]
+
+	suiteResult, err := fetchSuite(ctx, client, group, run.FileName)
+	if err != nil {
+		return err
+	}
+	tests, err := matchingTests(suiteResult, "", false, "fail")
+	if err != nil {
+		return err
+	}
+	sortMatches(tests)
+
+	if len(tests) == 0 {
+		if jsonOut {
+			return writePrettyJSON(os.Stdout, []BundleSummary{})
+		}
+		fmt.Printf("%s / %s / %s — no failing tests in latest run (%s)\n",
+			group, suite, clientName, formatTime(run.Start))
+		return nil
+	}
+
+	ff := fetchFlags{
+		common: commonFlags{
+			baseURL: client.baseURL,
+			group:   group,
+			suite:   suite,
+			client:  clientName,
+		},
+		outDir: "logs",
+		limit:  0,
+		status: "fail",
+	}
+
+	bundles := make([]BundleSummary, 0, len(tests))
+	for _, match := range tests {
+		bundle, err := fetchBundle(ctx, client, ff, run, suiteResult, match)
+		if err != nil {
+			return err
+		}
+		bundles = append(bundles, bundle)
+	}
+
+	if jsonOut {
+		return writePrettyJSON(os.Stdout, bundles)
+	}
+
+	fmt.Printf("%s / %s / %s\n", group, suite, clientName)
+	word := "tests"
+	if len(bundles) == 1 {
+		word = "test"
+	}
+	fmt.Printf("%s\nrun=%s\nurl=%s\n%s%d failing %s%s\n\n",
+		formatTime(run.Start), strings.TrimSuffix(run.FileName, ".json"), bundles[0].WebsiteURL,
+		ansiRed, len(bundles), word, ansiReset)
+	for _, b := range bundles {
+		fmt.Printf("• %s\n", b.TestName)
+		fmt.Printf("    hive log:    %s\n", b.HiveLogPath)
+		fmt.Printf("    client log:  %s\n", b.ClientLogPath)
+		fmt.Printf("    reproduce:   %s\n", b.ReproduceCommandsPath)
+	}
 	return nil
 }
 
@@ -819,6 +988,9 @@ func cmdFetch(args []string) error {
 	if ff.common.json {
 		return writePrettyJSON(os.Stdout, bundles)
 	}
+	if len(bundles) > 0 {
+		fmt.Printf("url: %s\n\n", bundles[0].WebsiteURL)
+	}
 	for _, b := range bundles {
 		fmt.Printf("wrote %s\n", b.Directory)
 		fmt.Printf("  hive log:              %s\n", b.HiveLogPath)
@@ -829,7 +1001,7 @@ func cmdFetch(args []string) error {
 }
 
 func fetchGroups(ctx context.Context, client *Client) ([]Group, error) {
-	data, err := client.get(ctx, "discovery.json")
+	data, err := client.get(ctx, hiveDiscoveryFile)
 	if err != nil {
 		return nil, err
 	}
@@ -841,7 +1013,7 @@ func fetchGroups(ctx context.Context, client *Client) ([]Group, error) {
 }
 
 func fetchListing(ctx context.Context, client *Client, group string) ([]ListingRun, error) {
-	data, err := client.get(ctx, pathJoin(group, "listing.jsonl"))
+	data, err := client.get(ctx, pathJoin(group, hiveListingFile))
 	if err != nil {
 		return nil, err
 	}
@@ -866,7 +1038,7 @@ func fetchListing(ctx context.Context, client *Client, group string) ([]ListingR
 }
 
 func fetchSuite(ctx context.Context, client *Client, group, fileName string) (*SuiteResult, error) {
-	data, err := client.get(ctx, pathJoin(group, "results", fileName))
+	data, err := client.get(ctx, pathJoin(group, hiveResultsDir, fileName))
 	if err != nil {
 		return nil, err
 	}
@@ -1061,6 +1233,7 @@ func listRow(group string, run ListingRun, suite *SuiteResult, match TestMatch) 
 
 type BundleSummary struct {
 	Directory             string   `json:"directory"`
+	WebsiteURL            string   `json:"website_url"`
 	SummaryPath           string   `json:"summary_path"`
 	ReproduceCommandsPath string   `json:"reproduce_commands_path"`
 	HiveLogPath           string   `json:"hive_log_path"`
@@ -1072,12 +1245,12 @@ type BundleSummary struct {
 }
 
 func fetchBundle(ctx context.Context, client *Client, ff fetchFlags, run ListingRun, suite *SuiteResult, match TestMatch) (BundleSummary, error) {
-	dir := filepath.Join(ff.outDir, bundleDirName(run, match))
+	dir := filepath.Join(ff.outDir, bundleDirName(ff.common.group, ff.common.suite, ff.common.client, run, match))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return BundleSummary{}, err
 	}
 
-	meta := buildMetadata(ff.common.group, run, suite, match)
+	meta := buildMetadata(client.baseURL, ff.common.group, run, suite, match)
 	summaryPath := filepath.Join(dir, "summary.json")
 	if err := writeJSONFile(summaryPath, meta); err != nil {
 		return BundleSummary{}, err
@@ -1092,7 +1265,8 @@ func fetchBundle(ctx context.Context, client *Client, ff fetchFlags, run Listing
 		return BundleSummary{}, err
 	}
 
-	clientPath := filepath.Join(dir, "client.log")
+	clientLogName := normalizeClient(ff.common.client) + ".log"
+	clientPath := filepath.Join(dir, clientLogName)
 	clientLog, clientFiles, err := fetchClientLogs(ctx, client, ff, match)
 	if err != nil {
 		clientLog = []byte(fmt.Sprintf("failed to fetch client log: %v\n", err))
@@ -1102,12 +1276,13 @@ func fetchBundle(ctx context.Context, client *Client, ff fetchFlags, run Listing
 	}
 
 	reproduceCommandsPath := filepath.Join(dir, "reproduce_commands.md")
-	if err := writeReproduceCommands(reproduceCommandsPath, meta, "hive.log", "client.log"); err != nil {
+	if err := writeReproduceCommands(reproduceCommandsPath, meta, "hive.log", clientLogName); err != nil {
 		return BundleSummary{}, err
 	}
 
 	return BundleSummary{
 		Directory:             dir,
+		WebsiteURL:            meta.WebsiteURL,
 		SummaryPath:           summaryPath,
 		ReproduceCommandsPath: reproduceCommandsPath,
 		HiveLogPath:           hivePath,
@@ -1126,7 +1301,7 @@ func fetchHiveLog(ctx context.Context, client *Client, group string, suite *Suit
 	if match.Test.SummaryResult.Log == nil {
 		return []byte(match.Test.SummaryResult.Details), nil
 	}
-	logPath := pathJoin(group, "results", suite.TestDetailsLog)
+	logPath := pathJoin(group, hiveResultsDir, suite.TestDetailsLog)
 	data, err := client.getRange(ctx, logPath, match.Test.SummaryResult.Log.Begin, match.Test.SummaryResult.Log.End)
 	if err != nil {
 		return nil, err
@@ -1161,7 +1336,7 @@ func fetchClientLogs(ctx context.Context, client *Client, ff fetchFlags, match T
 		if !ff.fullClient && info.LogOffsets != nil {
 			begin, end = info.LogOffsets.Begin, info.LogOffsets.End
 		}
-		data, err := client.getRange(ctx, pathJoin(ff.common.group, "results", info.LogFile), begin, end)
+		data, err := client.getRange(ctx, pathJoin(ff.common.group, hiveResultsDir, info.LogFile), begin, end)
 		if err != nil {
 			fmt.Fprintf(&out, "failed to fetch log: %v\n\n", err)
 			continue
@@ -1197,7 +1372,7 @@ type FailureMetadata struct {
 	BuildInfo       []ClientConfigEntry `json:"build_info,omitempty"`
 }
 
-func buildMetadata(group string, run ListingRun, suite *SuiteResult, match TestMatch) FailureMetadata {
+func buildMetadata(baseURL, group string, run ListingRun, suite *SuiteResult, match TestMatch) FailureMetadata {
 	infos := make([]ClientInfo, 0, len(match.Test.ClientInfo))
 	for _, info := range match.Test.ClientInfo {
 		infos = append(infos, info)
@@ -1224,7 +1399,7 @@ func buildMetadata(group string, run ListingRun, suite *SuiteResult, match TestM
 		ClientVersions:  suite.ClientVersions,
 		RunStart:        run.Start,
 		RunFile:         run.FileName,
-		WebsiteURL:      fmt.Sprintf("%s/#/test/%s/%s", defaultBaseURL, url.PathEscape(group), url.PathEscape(strings.TrimSuffix(run.FileName, ".json"))),
+		WebsiteURL:      fmt.Sprintf(hiveTestURLFormat, strings.TrimRight(baseURL, "/"), url.PathEscape(group), url.PathEscape(strings.TrimSuffix(run.FileName, ".json"))),
 		TestID:          match.TestID,
 		TestName:        match.Test.Name,
 		TestDescription: cleanDescription(match.Test.Description),
@@ -1272,13 +1447,30 @@ func writePrettyJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-func bundleDirName(run ListingRun, match TestMatch) string {
+func bundleDirName(group, suite, client string, run ListingRun, match TestMatch) string {
 	name := sanitizeFileName(match.Test.Name)
 	if len(name) > 90 {
 		name = name[:90]
 	}
-	sum := sha1.Sum([]byte(run.FileName + "/" + match.TestID + "/" + match.Test.Name))
-	return fmt.Sprintf("%s-%s-%s", strings.TrimSuffix(run.FileName, ".json"), match.TestID, hex.EncodeToString(sum[:])[:10]) + "-" + name
+	leaf := name + "-" + strings.TrimSuffix(run.FileName, ".json")
+	full := filepath.Join(
+		sanitizeFileName(group),
+		sanitizePathSegments(suite),
+		sanitizeFileName(normalizeClient(client)),
+		leaf,
+	)
+	return strings.ToLower(full)
+}
+
+// sanitizePathSegments sanitizes each `/`-separated segment so e.g.
+// `eels/consume-engine` becomes `eels/consume-engine` (segments cleaned but
+// the slash preserved as a path separator).
+func sanitizePathSegments(s string) string {
+	parts := strings.Split(s, "/")
+	for i, p := range parts {
+		parts[i] = sanitizeFileName(p)
+	}
+	return strings.Join(parts, "/")
 }
 
 func sanitizeFileName(s string) string {
@@ -1302,7 +1494,7 @@ func sanitizeFileName(s string) string {
 
 func normalizeClient(key string) string {
 	key = strings.TrimSpace(key)
-	for _, known := range []string{"go-ethereum", "nimbus-el"} {
+	for _, known := range hiveKnownClients {
 		if key == known || strings.HasPrefix(key, known+"_") {
 			return known
 		}
@@ -1310,14 +1502,10 @@ func normalizeClient(key string) string {
 	if idx := strings.LastIndex(key, "_"); idx > 0 {
 		return key[:idx]
 	}
-	switch key {
-	case "geth":
-		return "go-ethereum"
-	case "nimbusel":
-		return "nimbus-el"
-	default:
-		return key
+	if alias, ok := hiveClientAliases[key]; ok {
+		return alias
 	}
+	return key
 }
 
 func normalizedClients(clients []string) []string {
