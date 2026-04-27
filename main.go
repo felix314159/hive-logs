@@ -549,6 +549,14 @@ type SuiteClientSummary struct {
 	RunStart time.Time     `json:"run_start"`
 	RunFile  string        `json:"run_file"`
 	Duration time.Duration `json:"duration_ns"`
+	Branch   string        `json:"branch,omitempty"`
+	Commit   string        `json:"commit,omitempty"`
+	Version  string        `json:"version,omitempty"`
+}
+
+type fixturesInfo struct {
+	Release string `json:"release,omitempty"`
+	Branch  string `json:"branch,omitempty"`
 }
 
 func listSuiteClients(ctx context.Context, client *Client, group, suite string, jsonOut bool) error {
@@ -582,22 +590,38 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Client < out[j].Client })
 
-	var wg sync.WaitGroup
+	var (
+		wg         sync.WaitGroup
+		fixturesMu sync.Mutex
+		fixtures   fixturesInfo
+	)
 	for i := range out {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			suite, err := fetchSuite(ctx, client, group, out[i].RunFile)
+			suiteData, err := fetchSuite(ctx, client, group, out[i].RunFile)
 			if err != nil {
 				return
 			}
-			out[i].Duration = suiteDuration(suite)
+			out[i].Duration = suiteDuration(suiteData)
+			out[i].Version, out[i].Commit = suiteClientVersionInfo(suiteData, out[i].Client)
+			out[i].Branch = suiteClientBranch(suiteData)
+			if fx := suiteFixtures(suiteData); fx.Release != "" || fx.Branch != "" {
+				fixturesMu.Lock()
+				if fixtures.Release == "" && fixtures.Branch == "" {
+					fixtures = fx
+				}
+				fixturesMu.Unlock()
+			}
 		}(i)
 	}
 	wg.Wait()
 
 	if jsonOut {
-		return writePrettyJSON(os.Stdout, out)
+		return writePrettyJSON(os.Stdout, struct {
+			Fixtures fixturesInfo         `json:"fixtures,omitempty"`
+			Clients  []SuiteClientSummary `json:"clients"`
+		}{Fixtures: fixtures, Clients: out})
 	}
 
 	newest := out[0]
@@ -607,9 +631,13 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 		}
 	}
 	fmt.Printf("%s / %s\n", group, suite)
-	fmt.Printf("%s\nrun=%s\n\n", formatTime(newest.RunStart), strings.TrimSuffix(newest.RunFile, ".json"))
+	fmt.Printf("%s\nrun=%s\n", formatTime(newest.RunStart), strings.TrimSuffix(newest.RunFile, ".json"))
+	if line := formatFixtures(fixtures); line != "" {
+		fmt.Println(line)
+	}
+	fmt.Println()
 
-	w := newTextTable(os.Stdout, []string{"CLIENT", "PASS", "FAIL", "START", "DURATION"}, []bool{false, true, true, false, false})
+	w := newTextTable(os.Stdout, []string{"CLIENT", "PASS", "FAIL", "START", "DURATION", "BRANCH", "COMMIT", "VERSION"}, []bool{false, true, true, false, false, false, false, false})
 	for _, e := range out {
 		w.addRow(
 			textCell(e.Client),
@@ -617,10 +645,144 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 			failCell(e.Fails),
 			textCell(formatTime(e.RunStart)),
 			textCell(formatHMS(e.Duration)),
+			textCell(e.Branch),
+			textCell(e.Commit),
+			textCell(truncate(e.Version, 80)),
 		)
 	}
 	w.flush()
 	return nil
+}
+
+func suiteClientVersionInfo(suite *SuiteResult, canonical string) (version, commit string) {
+	for k, v := range suite.ClientVersions {
+		if normalizeClient(k) != canonical {
+			continue
+		}
+		line := firstLine(v)
+		return cleanClientVersion(canonical, line), extractCommitHash(line)
+	}
+	return "", ""
+}
+
+// cleanClientVersion strips per-client noise (binary name, build host, etc.)
+// from the runtime version string and leaves just the actionable bit. The
+// raw shapes vary by client, so each one needs its own rule.
+func cleanClientVersion(canonical, raw string) string {
+	raw = strings.TrimSpace(raw)
+	cleaned := raw
+	switch canonical {
+	case "besu", "go-ethereum", "nimbus-el":
+		// "<Name>/<version>/<arch>/<extras>" — keep the version segment.
+		if parts := strings.SplitN(raw, "/", 3); len(parts) >= 2 {
+			cleaned = parts[1]
+		}
+	case "ethrex":
+		// "ethrex/<version>-<branch>-<commit>/<arch>/..." — keep just the
+		// leading semver tag before the branch/commit fragments.
+		if parts := strings.SplitN(raw, "/", 3); len(parts) >= 2 {
+			cleaned = parts[1]
+			if i := strings.Index(cleaned, "-"); i > 0 {
+				cleaned = cleaned[:i]
+			}
+		}
+	case "reth":
+		cleaned = strings.TrimPrefix(raw, "Reth Version: ")
+	}
+	return strings.TrimPrefix(cleaned, "v")
+}
+
+var commitHashRe = regexp.MustCompile(`(?i)[0-9a-f]{7,40}`)
+
+// extractCommitHash returns the first 7 chars of the first hex run that looks
+// like a git commit SHA in the raw version string, or "" if none is present.
+func extractCommitHash(raw string) string {
+	m := commitHashRe.FindString(raw)
+	if m == "" {
+		return ""
+	}
+	if len(m) > 7 {
+		return strings.ToLower(m[:7])
+	}
+	return strings.ToLower(m)
+}
+
+func suiteClientBranch(suite *SuiteResult) string {
+	if suite.RunMetadata == nil || suite.RunMetadata.ClientConfig == nil ||
+		suite.RunMetadata.ClientConfig.Content == nil {
+		return ""
+	}
+	for _, c := range suite.RunMetadata.ClientConfig.Content.Clients {
+		if tag, ok := c.BuildArgs["tag"]; ok && tag != "" {
+			return tag
+		}
+	}
+	return ""
+}
+
+func suiteFixtures(suite *SuiteResult) fixturesInfo {
+	var info fixturesInfo
+	if suite.RunMetadata == nil {
+		return info
+	}
+	cmd := suite.RunMetadata.HiveCommand
+	for i := 0; i+1 < len(cmd); i++ {
+		if cmd[i] != "--sim.buildarg" {
+			continue
+		}
+		v := cmd[i+1]
+		switch {
+		case strings.HasPrefix(v, "fixtures="):
+			info.Release = parseFixturesRelease(strings.TrimPrefix(v, "fixtures="))
+		case strings.HasPrefix(v, "branch="):
+			info.Branch = strings.TrimPrefix(v, "branch=")
+		}
+	}
+	return info
+}
+
+// parseFixturesRelease extracts the release tag from a GitHub release asset URL
+// like .../releases/download/v5.3.0/fixtures_stable.tar.gz.
+func parseFixturesRelease(rawURL string) string {
+	const marker = "/releases/download/"
+	i := strings.Index(rawURL, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := rawURL[i+len(marker):]
+	if j := strings.Index(rest, "/"); j > 0 {
+		return rest[:j]
+	}
+	return rest
+}
+
+func formatFixtures(fx fixturesInfo) string {
+	parts := make([]string, 0, 2)
+	if fx.Release != "" {
+		parts = append(parts, "fixtures="+fx.Release)
+	}
+	if fx.Branch != "" {
+		parts = append(parts, "eels="+fx.Branch)
+	}
+	return strings.Join(parts, " ")
+}
+
+func firstLine(s string) string {
+	s = strings.TrimRight(s, "\r\n")
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+func truncate(s string, n int) string {
+	if n <= 0 || len(s) <= n {
+		return s
+	}
+	if n <= 3 {
+		return s[:n]
+	}
+	return s[:n-3] + "..."
 }
 
 func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite, clientName string, jsonOut bool) error {
