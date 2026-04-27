@@ -557,6 +557,7 @@ type SuiteClientSummary struct {
 type fixturesInfo struct {
 	Release string `json:"release,omitempty"`
 	Branch  string `json:"branch,omitempty"`
+	URL     string `json:"url,omitempty"`
 }
 
 func listSuiteClients(ctx context.Context, client *Client, group, suite string, jsonOut bool) error {
@@ -591,9 +592,10 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 	sort.Slice(out, func(i, j int) bool { return out[i].Client < out[j].Client })
 
 	var (
-		wg         sync.WaitGroup
-		fixturesMu sync.Mutex
-		fixtures   fixturesInfo
+		wg          sync.WaitGroup
+		metaMu      sync.Mutex
+		fixtures    fixturesInfo
+		hiveVersion *HiveVersion
 	)
 	for i := range out {
 		wg.Add(1)
@@ -606,22 +608,30 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 			out[i].Duration = suiteDuration(suiteData)
 			out[i].Version, out[i].Commit = suiteClientVersionInfo(suiteData, out[i].Client)
 			out[i].Branch = suiteClientBranch(suiteData)
-			if fx := suiteFixtures(suiteData); fx.Release != "" || fx.Branch != "" {
-				fixturesMu.Lock()
-				if fixtures.Release == "" && fixtures.Branch == "" {
-					fixtures = fx
-				}
-				fixturesMu.Unlock()
+
+			fx := suiteFixtures(suiteData)
+			var hv *HiveVersion
+			if suiteData.RunMetadata != nil {
+				hv = suiteData.RunMetadata.HiveVersion
 			}
+			metaMu.Lock()
+			if fixtures.Release == "" && fixtures.Branch == "" && (fx.Release != "" || fx.Branch != "") {
+				fixtures = fx
+			}
+			if hiveVersion == nil && hv != nil {
+				hiveVersion = hv
+			}
+			metaMu.Unlock()
 		}(i)
 	}
 	wg.Wait()
 
 	if jsonOut {
 		return writePrettyJSON(os.Stdout, struct {
+			Hive     *HiveVersion         `json:"hive,omitempty"`
 			Fixtures fixturesInfo         `json:"fixtures,omitempty"`
 			Clients  []SuiteClientSummary `json:"clients"`
-		}{Fixtures: fixtures, Clients: out})
+		}{Hive: hiveVersion, Fixtures: fixtures, Clients: out})
 	}
 
 	newest := out[0]
@@ -632,6 +642,9 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 	}
 	fmt.Printf("%s / %s\n", group, suite)
 	fmt.Printf("%s\nrun=%s\n", formatTime(newest.RunStart), strings.TrimSuffix(newest.RunFile, ".json"))
+	if line := formatHiveVersion(hiveVersion); line != "" {
+		fmt.Println(line)
+	}
 	if line := formatFixtures(fixtures); line != "" {
 		fmt.Println(line)
 	}
@@ -733,7 +746,7 @@ func suiteFixtures(suite *SuiteResult) fixturesInfo {
 		v := cmd[i+1]
 		switch {
 		case strings.HasPrefix(v, "fixtures="):
-			info.Release = parseFixturesRelease(strings.TrimPrefix(v, "fixtures="))
+			info.Release, info.URL = parseFixturesAssetURL(strings.TrimPrefix(v, "fixtures="))
 		case strings.HasPrefix(v, "branch="):
 			info.Branch = strings.TrimPrefix(v, "branch=")
 		}
@@ -741,30 +754,81 @@ func suiteFixtures(suite *SuiteResult) fixturesInfo {
 	return info
 }
 
-// parseFixturesRelease extracts the release tag from a GitHub release asset URL
-// like .../releases/download/v5.3.0/fixtures_stable.tar.gz.
-func parseFixturesRelease(rawURL string) string {
+// parseFixturesAssetURL takes a GitHub release asset URL like
+// https://github.com/<org>/<repo>/releases/download/<tag>/<file> and returns
+// the tag and the corresponding /releases/tag/<tag> page URL.
+func parseFixturesAssetURL(assetURL string) (release, tagURL string) {
 	const marker = "/releases/download/"
-	i := strings.Index(rawURL, marker)
+	i := strings.Index(assetURL, marker)
 	if i < 0 {
+		return "", ""
+	}
+	base := assetURL[:i]
+	rest := assetURL[i+len(marker):]
+	if j := strings.Index(rest, "/"); j > 0 {
+		release = rest[:j]
+	} else {
+		release = rest
+	}
+	if release == "" {
+		return "", ""
+	}
+	return release, base + "/releases/tag/" + release
+}
+
+func formatHiveVersion(hv *HiveVersion) string {
+	if hv == nil {
 		return ""
 	}
-	rest := rawURL[i+len(marker):]
-	if j := strings.Index(rest, "/"); j > 0 {
-		return rest[:j]
+	parts := make([]string, 0, 2)
+	if hv.Branch != "" {
+		parts = append(parts, "branch="+hv.Branch)
 	}
-	return rest
+	if hv.Commit != "" {
+		short := hv.Commit
+		if len(short) > 7 {
+			short = short[:7]
+		}
+		parts = append(parts, "commit="+short)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "hive " + strings.Join(parts, ", ")
+}
+
+func formatClientInfo(name, branch, commit, version string) string {
+	parts := make([]string, 0, 3)
+	if branch != "" {
+		parts = append(parts, "branch="+branch)
+	}
+	if commit != "" {
+		parts = append(parts, "commit="+commit)
+	}
+	if version != "" {
+		parts = append(parts, "version="+version)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return name + " " + strings.Join(parts, ", ")
 }
 
 func formatFixtures(fx fixturesInfo) string {
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 3)
+	if fx.Branch != "" {
+		parts = append(parts, "branch="+fx.Branch)
+	}
 	if fx.Release != "" {
 		parts = append(parts, "fixtures="+fx.Release)
 	}
-	if fx.Branch != "" {
-		parts = append(parts, "eels="+fx.Branch)
+	if fx.URL != "" {
+		parts = append(parts, "url="+fx.URL)
 	}
-	return strings.Join(parts, " ")
+	if len(parts) == 0 {
+		return ""
+	}
+	return "EELS: " + strings.Join(parts, ", ")
 }
 
 func firstLine(s string) string {
@@ -811,8 +875,8 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 		if jsonOut {
 			return writePrettyJSON(os.Stdout, []BundleSummary{})
 		}
-		fmt.Printf("%s / %s / %s — no failing tests in latest run (%s)\n",
-			group, suite, clientName, formatTime(run.Start))
+		fmt.Printf("%s / %s / %s (%s)\n%sno failing tests in latest run%s\n",
+			group, suite, clientName, formatTime(run.Start), ansiGreen, ansiReset)
 		return nil
 	}
 
@@ -842,13 +906,22 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 	}
 
 	fmt.Printf("%s / %s / %s\n", group, suite, clientName)
+	fmt.Printf("%s\nrun=%s\n", formatTime(run.Start), strings.TrimSuffix(run.FileName, ".json"))
+	if suiteResult.RunMetadata != nil {
+		if line := formatHiveVersion(suiteResult.RunMetadata.HiveVersion); line != "" {
+			fmt.Println(line)
+		}
+	}
+	clientVersion, clientCommit := suiteClientVersionInfo(suiteResult, clientName)
+	if line := formatClientInfo(clientName, suiteClientBranch(suiteResult), clientCommit, clientVersion); line != "" {
+		fmt.Println(line)
+	}
 	word := "tests"
 	if len(bundles) == 1 {
 		word = "test"
 	}
-	fmt.Printf("%s\nrun=%s\nurl=%s\n%s%d failing %s%s\n\n",
-		formatTime(run.Start), strings.TrimSuffix(run.FileName, ".json"), bundles[0].WebsiteURL,
-		ansiRed, len(bundles), word, ansiReset)
+	fmt.Printf("url=%s\n%s%d failing %s%s\n\n",
+		bundles[0].WebsiteURL, ansiRed, len(bundles), word, ansiReset)
 	for _, b := range bundles {
 		fmt.Printf("• %s\n", b.TestName)
 		fmt.Printf("    hive log:    %s\n", b.HiveLogPath)
