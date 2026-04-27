@@ -82,8 +82,9 @@ Usage:
       List every simulator/suite seen in GROUP with run counts and the latest run timestamp.
   groups GROUP SUITE
       Show per-client pass/fail counts, run start, and duration for the latest SUITE run in GROUP.
-  runs  --group generic [--suite eels/consume-engine] [--client go-ethereum]
-      Print a table of recent Hive runs, optionally filtered by suite and client.
+  runs  --group generic [--suite eels/consume-engine] [--client go-ethereum] [--all] [--limit N]
+      Print the latest matching Hive runs grouped by suite, then client. Omit --suite to show all suites.
+      Use --all to include older runs, then pass a FILE to --run-file for list/fetch.
   list  --group generic --suite eels/consume-engine --client go-ethereum [--test TEXT]
       List tests from the latest matching run with pass/fail status and log availability.
   fetch --group generic --suite eels/consume-engine --client go-ethereum --test TEXT [--out logs]
@@ -462,12 +463,18 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 	fmt.Printf("%s / %s\n", group, suite)
 	fmt.Printf("%s\nrun=%s\n\n", formatTime(newest.RunStart), strings.TrimSuffix(newest.RunFile, ".json"))
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "CLIENT\tPASS\tFAIL\tSTART\tDURATION")
+	w := newTextTable(os.Stdout, []string{"CLIENT", "PASS", "FAIL", "START", "DURATION"}, []bool{false, true, true, false, false})
 	for _, e := range out {
-		fmt.Fprintf(w, "%s\t%d\t%d\t%s\t%s\n", e.Client, e.Passes, e.Fails, formatTime(e.RunStart), formatHMS(e.Duration))
+		w.addRow(
+			textCell(e.Client),
+			passCell(e.Passes),
+			failCell(e.Fails),
+			textCell(formatTime(e.RunStart)),
+			textCell(formatHMS(e.Duration)),
+		)
 	}
-	return w.Flush()
+	w.flush()
+	return nil
 }
 
 func suiteDuration(suite *SuiteResult) time.Duration {
@@ -506,11 +513,106 @@ func formatHMS(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d:%02d", h, m, s)
 }
 
+const (
+	ansiGreen = "\x1b[32m"
+	ansiRed   = "\x1b[31m"
+	ansiReset = "\x1b[0m"
+)
+
+type textTable struct {
+	w       io.Writer
+	headers []string
+	right   []bool
+	rows    [][]tableCell
+}
+
+type tableCell struct {
+	text  string
+	plain string
+}
+
+func newTextTable(w io.Writer, headers []string, right []bool) *textTable {
+	return &textTable{w: w, headers: headers, right: right}
+}
+
+func (t *textTable) addRow(cells ...tableCell) {
+	t.rows = append(t.rows, cells)
+}
+
+func (t *textTable) flush() {
+	widths := make([]int, len(t.headers))
+	for i, header := range t.headers {
+		widths[i] = len(header)
+	}
+	for _, row := range t.rows {
+		for i, cell := range row {
+			if i < len(widths) && len(cell.plain) > widths[i] {
+				widths[i] = len(cell.plain)
+			}
+		}
+	}
+
+	headerCells := make([]tableCell, len(t.headers))
+	for i, header := range t.headers {
+		headerCells[i] = textCell(header)
+	}
+	t.writeRow(widths, headerCells)
+	for _, row := range t.rows {
+		t.writeRow(widths, row)
+	}
+}
+
+func (t *textTable) writeRow(widths []int, row []tableCell) {
+	for i, cell := range row {
+		if i > 0 {
+			fmt.Fprint(t.w, "  ")
+		}
+		padding := widths[i] - len(cell.plain)
+		if padding < 0 {
+			padding = 0
+		}
+		if i < len(t.right) && t.right[i] {
+			fmt.Fprint(t.w, strings.Repeat(" ", padding))
+			fmt.Fprint(t.w, cell.text)
+			continue
+		}
+		fmt.Fprint(t.w, cell.text)
+		fmt.Fprint(t.w, strings.Repeat(" ", padding))
+	}
+	fmt.Fprintln(t.w)
+}
+
+func textCell(text string) tableCell {
+	return tableCell{text: text, plain: text}
+}
+
+func passCell(n int) tableCell {
+	return colorIntCell(n, n != 0)
+}
+
+func failCell(n int) tableCell {
+	return colorIntCell(n, n == 0)
+}
+
+func colorIntCell(n int, green bool) tableCell {
+	plain := strconv.Itoa(n)
+	return tableCell{text: colorInt(n, green), plain: plain}
+}
+
+func colorInt(n int, green bool) string {
+	color := ansiRed
+	if green {
+		color = ansiGreen
+	}
+	return fmt.Sprintf("%s%d%s", color, n, ansiReset)
+}
+
 func cmdRuns(args []string) error {
 	var cf commonFlags
 	fs := flag.NewFlagSet("runs", flag.ExitOnError)
 	addCommonFlags(fs, &cf)
-	limit := fs.Int("limit", 50, "maximum rows to print")
+	all := fs.Bool("all", false, "show historical runs instead of only the latest per suite/client")
+	limit := fs.Int("limit", 0, "maximum rows to print, 0 for all")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -521,8 +623,12 @@ func cmdRuns(args []string) error {
 	if err != nil {
 		return err
 	}
-	runs = filterRuns(runs, cf.suite, cf.client, "")
-	sortRunsNewestFirst(runs)
+	latestMode := "latest"
+	if *all {
+		latestMode = ""
+	}
+	runs = filterRuns(runs, cf.suite, cf.client, latestMode)
+	sortRunsForDisplay(runs)
 	if *limit > 0 && len(runs) > *limit {
 		runs = runs[:*limit]
 	}
@@ -530,19 +636,19 @@ func cmdRuns(args []string) error {
 		return writePrettyJSON(os.Stdout, runs)
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "START\tSUITE\tCLIENTS\tPASS\tFAIL\tFILE")
+	w := newTextTable(os.Stdout, []string{"START", "SUITE", "CLIENTS", "PASS", "FAIL", "FILE"}, []bool{false, false, false, true, true, false})
 	for _, run := range runs {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\n",
-			formatTime(run.Start),
-			run.Name,
-			strings.Join(normalizedClients(run.Clients), ","),
-			run.Passes,
-			run.Fails,
-			run.FileName,
+		w.addRow(
+			textCell(formatTime(run.Start)),
+			textCell(run.Name),
+			textCell(strings.Join(normalizedSortedClients(run.Clients), ",")),
+			passCell(run.Passes),
+			failCell(run.Fails),
+			textCell(run.FileName),
 		)
 	}
-	return w.Flush()
+	w.flush()
+	return nil
 }
 
 func cmdList(args []string) error {
@@ -785,6 +891,27 @@ func sortRunsNewestFirst(runs []ListingRun) {
 	sort.SliceStable(runs, func(i, j int) bool {
 		return runs[i].Start.After(runs[j].Start)
 	})
+}
+
+func sortRunsForDisplay(runs []ListingRun) {
+	sort.SliceStable(runs, func(i, j int) bool {
+		if runs[i].Name != runs[j].Name {
+			return runs[i].Name < runs[j].Name
+		}
+		leftClients := clientsDisplayKey(runs[i].Clients)
+		rightClients := clientsDisplayKey(runs[j].Clients)
+		if leftClients != rightClients {
+			return leftClients < rightClients
+		}
+		if !runs[i].Start.Equal(runs[j].Start) {
+			return runs[i].Start.After(runs[j].Start)
+		}
+		return runs[i].FileName < runs[j].FileName
+	})
+}
+
+func clientsDisplayKey(clients []string) string {
+	return strings.Join(normalizedSortedClients(clients), ",")
 }
 
 func runHasClient(run ListingRun, want string) bool {
@@ -1150,6 +1277,12 @@ func normalizedClients(clients []string) []string {
 	for _, client := range clients {
 		out = append(out, normalizeClient(client))
 	}
+	return out
+}
+
+func normalizedSortedClients(clients []string) []string {
+	out := normalizedClients(clients)
+	sort.Strings(out)
 	return out
 }
 

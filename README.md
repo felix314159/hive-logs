@@ -44,11 +44,17 @@ Show per-client pass/fail counts for the latest run of a simulator:
 go run . groups generic engine-api
 ```
 
-Find recent runs for a suite/client:
+Find the latest run for each suite/client:
 
 ```sh
 go run . runs --group generic --suite eels/consume-engine --client go-ethereum
 ```
+
+Omit `--suite` to show the latest runs from all suites, grouped alphabetically
+by suite and then client. Add `--all` when you want to include older runs, then
+use the printed file name with `--run-file` on `list` or `fetch` to inspect a
+specific older run. Add `--limit N` when you want to cap the number of rows
+printed.
 
 List failing tests in the latest matching run. `--test` is a case-insensitive
 substring by default, so full pytest ids can be pasted without escaping regex
