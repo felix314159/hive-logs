@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestRunsWithoutSuiteShowsLatestForEverySuite(t *testing.T) {
+func TestGroupsShowsLatestRunForEverySuite(t *testing.T) {
 	runs := append(sampleRuns(51), ListingRun{
 		Name:     "eels/consume-engine",
 		NTests:   40523,
@@ -34,20 +34,20 @@ func TestRunsWithoutSuiteShowsLatestForEverySuite(t *testing.T) {
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdRuns([]string{"--base-url", server.URL})
+		return cmdGroups([]string{"--base-url", server.URL, "generic"})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output, "eels/consume-engine") {
-		t.Fatalf("unfiltered runs output did not include eels/consume-engine:\n%s", output)
+		t.Fatalf("groups output did not include eels/consume-engine:\n%s", output)
 	}
-	if strings.Contains(output, "older-eels.json") {
-		t.Fatalf("default runs output included older eels run:\n%s", output)
+	if strings.Contains(output, "2026-04-25") {
+		t.Fatalf("default groups output included older eels run:\n%s", output)
 	}
 }
 
-func TestRunsAllShowsOlderRuns(t *testing.T) {
+func TestGroupsAllShowsOlderRuns(t *testing.T) {
 	server := listingServer(t, []ListingRun{
 		{
 			Name:     "eels/consume-engine",
@@ -71,17 +71,17 @@ func TestRunsAllShowsOlderRuns(t *testing.T) {
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdRuns([]string{"--base-url", server.URL, "--all"})
+		return cmdGroups([]string{"--base-url", server.URL, "generic", "--all"})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output, "older-eels.json") {
-		t.Fatalf("runs --all output did not include older eels run:\n%s", output)
+	if !strings.Contains(output, "2026-04-25") {
+		t.Fatalf("groups --all output did not include older eels run:\n%s", output)
 	}
 }
 
-func TestRunsOutputSortedBySuiteThenClient(t *testing.T) {
+func TestGroupsOutputSortedBySuiteThenClient(t *testing.T) {
 	server := listingServer(t, []ListingRun{
 		{
 			Name:     "rpc-compat",
@@ -119,18 +119,50 @@ func TestRunsOutputSortedBySuiteThenClient(t *testing.T) {
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdRuns([]string{"--base-url", server.URL})
+		return cmdGroups([]string{"--base-url", server.URL, "generic"})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertBefore(t, output, "eels-geth.json", "eels-reth.json")
-	assertBefore(t, output, "eels-reth.json", "graphql-geth.json")
-	assertBefore(t, output, "graphql-geth.json", "rpc-reth.json")
+	assertLineBefore(t, output, []string{"eels/consume-engine", "go-ethereum"}, []string{"eels/consume-engine", "reth"})
+	assertLineBefore(t, output, []string{"eels/consume-engine", "reth"}, []string{"graphql", "go-ethereum"})
+	assertLineBefore(t, output, []string{"graphql", "go-ethereum"}, []string{"rpc-compat", "reth"})
 }
 
-func TestRunsColorsPassFailCounts(t *testing.T) {
+func TestGroupsClientFlagFiltersAfterGroupName(t *testing.T) {
+	server := listingServer(t, []ListingRun{
+		{
+			Name:     "suite-a",
+			Passes:   1,
+			Fails:    0,
+			Clients:  []string{"go-ethereum"},
+			Start:    time.Date(2026, 4, 27, 8, 18, 24, 0, time.UTC),
+			FileName: "suite-a.json",
+		},
+		{
+			Name:     "suite-b",
+			Passes:   1,
+			Fails:    0,
+			Clients:  []string{"reth"},
+			Start:    time.Date(2026, 4, 27, 7, 32, 49, 0, time.UTC),
+			FileName: "suite-b.json",
+		},
+	})
+	defer server.Close()
+
+	output, err := captureStdout(func() error {
+		return cmdGroups([]string{"generic", "--base-url", server.URL, "--client", "go-ethereum"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "suite-a") || strings.Contains(output, "suite-b") {
+		t.Fatalf("groups --client did not filter output:\n%s", output)
+	}
+}
+
+func TestGroupsColorsPassFailCounts(t *testing.T) {
 	server := listingServer(t, []ListingRun{
 		{
 			Name:     "suite-a",
@@ -152,7 +184,7 @@ func TestRunsColorsPassFailCounts(t *testing.T) {
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdRuns([]string{"--base-url", server.URL})
+		return cmdGroups([]string{"--base-url", server.URL, "generic"})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -165,23 +197,63 @@ func TestRunsColorsPassFailCounts(t *testing.T) {
 		ansiGreen + "0" + ansiReset,
 	} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("runs output does not contain colored count %q:\n%s", want, output)
+			t.Fatalf("groups output does not contain colored count %q:\n%s", want, output)
 		}
 	}
 }
 
-func TestRunsLimitStillCapsRows(t *testing.T) {
-	server := listingServer(t, sampleRuns(3))
+func TestGroupsOmitsFilesByDefaultAndShowsThemWithFlag(t *testing.T) {
+	server := listingServer(t, []ListingRun{
+		{
+			Name:     "suite-a",
+			Passes:   1,
+			Fails:    0,
+			Clients:  []string{"go-ethereum"},
+			Start:    time.Date(2026, 4, 27, 8, 18, 24, 0, time.UTC),
+			FileName: "suite-a.json",
+		},
+	})
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdRuns([]string{"--base-url", server.URL, "--limit", "2"})
+		return cmdGroups([]string{"--base-url", server.URL, "generic"})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(output, ".json"); got != 2 {
+	if strings.Contains(output, "FILE") || strings.Contains(output, "suite-a.json") {
+		t.Fatalf("groups output included file column by default:\n%s", output)
+	}
+
+	output, err = captureStdout(func() error {
+		return cmdGroups([]string{"--base-url", server.URL, "generic", "--files"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "FILE") || !strings.Contains(output, "suite-a.json") {
+		t.Fatalf("groups --files output did not include file column:\n%s", output)
+	}
+}
+
+func TestGroupsLimitStillCapsRows(t *testing.T) {
+	server := listingServer(t, sampleRuns(3))
+	defer server.Close()
+
+	output, err := captureStdout(func() error {
+		return cmdGroups([]string{"--base-url", server.URL, "generic", "--limit", "2"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := dataLineCount(output); got != 2 {
 		t.Fatalf("expected 2 run rows, got %d:\n%s", got, output)
+	}
+}
+
+func TestRunsCommandRemoved(t *testing.T) {
+	if err := run([]string{"runs"}); err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("runs command should be removed, got err=%v", err)
 	}
 }
 
@@ -202,19 +274,43 @@ func sampleRuns(n int) []ListingRun {
 	return runs
 }
 
-func assertBefore(t *testing.T, output, before, after string) {
+func assertLineBefore(t *testing.T, output string, beforeTerms, afterTerms []string) {
 	t.Helper()
-	beforeIdx := strings.Index(output, before)
+	beforeIdx := lineIndex(output, beforeTerms)
 	if beforeIdx == -1 {
-		t.Fatalf("output does not contain %q:\n%s", before, output)
+		t.Fatalf("output does not contain line with %q:\n%s", beforeTerms, output)
 	}
-	afterIdx := strings.Index(output, after)
+	afterIdx := lineIndex(output, afterTerms)
 	if afterIdx == -1 {
-		t.Fatalf("output does not contain %q:\n%s", after, output)
+		t.Fatalf("output does not contain line with %q:\n%s", afterTerms, output)
 	}
 	if beforeIdx > afterIdx {
-		t.Fatalf("expected %q before %q:\n%s", before, after, output)
+		t.Fatalf("expected %q before %q:\n%s", beforeTerms, afterTerms, output)
 	}
+}
+
+func lineIndex(output string, terms []string) int {
+	for i, line := range strings.Split(output, "\n") {
+		found := true
+		for _, term := range terms {
+			if !strings.Contains(line, term) {
+				found = false
+				break
+			}
+		}
+		if found {
+			return i
+		}
+	}
+	return -1
+}
+
+func dataLineCount(output string) int {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		return 0
+	}
+	return len(lines) - 1
 }
 
 func listingServer(t *testing.T, runs []ListingRun) *httptest.Server {

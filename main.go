@@ -58,8 +58,6 @@ func run(args []string) error {
 	switch cmd {
 	case "groups":
 		return cmdGroups(args)
-	case "runs":
-		return cmdRuns(args)
 	case "list":
 		return cmdList(args)
 	case "fetch":
@@ -78,13 +76,11 @@ Usage:
       Print the current version.
   groups
       List all result groups (e.g. generic, bal) with their website URL and the latest run timestamp.
-  groups GROUP
-      List every simulator/suite seen in GROUP with run counts and the latest run timestamp.
+  groups GROUP [--client go-ethereum] [--all] [--files] [--limit N]
+      Print the latest matching Hive runs grouped by suite, then client.
+      Use --all to include older runs and --files to print values for --run-file.
   groups GROUP SUITE
       Show per-client pass/fail counts, run start, and duration for the latest SUITE run in GROUP.
-  runs  --group generic [--suite eels/consume-engine] [--client go-ethereum] [--all] [--limit N]
-      Print the latest matching Hive runs grouped by suite, then client. Omit --suite to show all suites.
-      Use --all to include older runs, then pass a FILE to --run-file for list/fetch.
   list  --group generic --suite eels/consume-engine --client go-ethereum [--test TEXT]
       List tests from the latest matching run with pass/fail status and log availability.
   fetch --group generic --suite eels/consume-engine --client go-ethereum --test TEXT [--out logs]
@@ -98,7 +94,7 @@ Common flags:
   --test TEXT       Case-insensitive text matched against the Hive test name
   --regex           Treat --test as a case-insensitive regular expression
   --json            Emit JSON instead of a table/status text
-  --run-file FILE   Use a specific result JSON from runs output instead of latest matching run
+  --run-file FILE   Use a specific result JSON from groups GROUP --all --files instead of latest matching run
 
 Fetch flags:
   --out DIR         Directory for log bundles (default: logs)
@@ -282,22 +278,119 @@ func addCommonFlags(fs *flag.FlagSet, cf *commonFlags) {
 	fs.BoolVar(&cf.json, "json", false, "emit JSON")
 }
 
+type groupsFlags struct {
+	baseURL   string
+	client    string
+	all       bool
+	showFiles bool
+	limit     int
+	json      bool
+}
+
+func parseGroupsArgs(args []string) (groupsFlags, []string, error) {
+	gf := groupsFlags{
+		baseURL: defaultBaseURL,
+		limit:   0,
+	}
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			rest = append(rest, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "--") {
+			rest = append(rest, arg)
+			continue
+		}
+
+		name, value, hasValue := strings.Cut(strings.TrimPrefix(arg, "--"), "=")
+		switch name {
+		case "base-url":
+			if !hasValue {
+				i++
+				if i >= len(args) {
+					return gf, nil, errors.New("--base-url requires a value")
+				}
+				value = args[i]
+			}
+			gf.baseURL = value
+		case "client":
+			if !hasValue {
+				i++
+				if i >= len(args) {
+					return gf, nil, errors.New("--client requires a value")
+				}
+				value = args[i]
+			}
+			gf.client = value
+		case "limit":
+			if !hasValue {
+				i++
+				if i >= len(args) {
+					return gf, nil, errors.New("--limit requires a value")
+				}
+				value = args[i]
+			}
+			limit, err := strconv.Atoi(value)
+			if err != nil {
+				return gf, nil, fmt.Errorf("invalid --limit %q: %w", value, err)
+			}
+			gf.limit = limit
+		case "all":
+			if hasValue {
+				v, err := strconv.ParseBool(value)
+				if err != nil {
+					return gf, nil, fmt.Errorf("invalid --all %q: %w", value, err)
+				}
+				gf.all = v
+				continue
+			}
+			gf.all = true
+		case "files":
+			if hasValue {
+				v, err := strconv.ParseBool(value)
+				if err != nil {
+					return gf, nil, fmt.Errorf("invalid --files %q: %w", value, err)
+				}
+				gf.showFiles = v
+				continue
+			}
+			gf.showFiles = true
+		case "json":
+			if hasValue {
+				v, err := strconv.ParseBool(value)
+				if err != nil {
+					return gf, nil, fmt.Errorf("invalid --json %q: %w", value, err)
+				}
+				gf.json = v
+				continue
+			}
+			gf.json = true
+		default:
+			return gf, nil, fmt.Errorf("unknown groups flag --%s", name)
+		}
+	}
+	return gf, rest, nil
+}
+
 func cmdGroups(args []string) error {
-	fs := flag.NewFlagSet("groups", flag.ExitOnError)
-	baseURL := fs.String("base-url", defaultBaseURL, "Hive results origin")
-	jsonOut := fs.Bool("json", false, "emit JSON")
-	if err := fs.Parse(args); err != nil {
+	gf, rest, err := parseGroupsArgs(args)
+	if err != nil {
 		return err
+	}
+	if len(rest) > 2 {
+		return fmt.Errorf("too many positional arguments for groups: %s", strings.Join(rest[2:], " "))
 	}
 
 	ctx := context.Background()
-	client := newClient(*baseURL)
+	client := newClient(gf.baseURL)
 
-	if rest := fs.Args(); len(rest) > 0 {
-		if len(rest) >= 2 {
-			return listSuiteClients(ctx, client, rest[0], rest[1], *jsonOut)
+	if len(rest) > 0 {
+		if len(rest) == 2 {
+			return listSuiteClients(ctx, client, rest[0], rest[1], gf.json)
 		}
-		return listSimulators(ctx, client, rest[0], *jsonOut)
+		return listGroupRuns(ctx, client, rest[0], gf)
 	}
 
 	groups, err := fetchGroups(ctx, client)
@@ -305,7 +398,7 @@ func cmdGroups(args []string) error {
 		return err
 	}
 
-	base := strings.TrimRight(*baseURL, "/")
+	base := strings.TrimRight(gf.baseURL, "/")
 	summaries := make([]GroupSummary, len(groups))
 	var wg sync.WaitGroup
 	for i, g := range groups {
@@ -329,7 +422,7 @@ func cmdGroups(args []string) error {
 	}
 	wg.Wait()
 
-	if *jsonOut {
+	if gf.json {
 		return writePrettyJSON(os.Stdout, summaries)
 	}
 
@@ -349,49 +442,6 @@ type GroupSummary struct {
 	Name   string    `json:"name"`
 	URL    string    `json:"url"`
 	Latest time.Time `json:"latest"`
-}
-
-type SimulatorSummary struct {
-	Name      string    `json:"name"`
-	Runs      int       `json:"runs"`
-	LatestRun time.Time `json:"latest_run"`
-}
-
-func listSimulators(ctx context.Context, client *Client, group string, jsonOut bool) error {
-	runs, err := fetchListing(ctx, client, group)
-	if err != nil {
-		return err
-	}
-	summaries := make(map[string]*SimulatorSummary)
-	for _, run := range runs {
-		s, ok := summaries[run.Name]
-		if !ok {
-			s = &SimulatorSummary{Name: run.Name}
-			summaries[run.Name] = s
-		}
-		s.Runs++
-		if run.Start.After(s.LatestRun) {
-			s.LatestRun = run.Start
-		}
-	}
-	out := make([]SimulatorSummary, 0, len(summaries))
-	for _, s := range summaries {
-		out = append(out, *s)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
-	})
-
-	if jsonOut {
-		return writePrettyJSON(os.Stdout, out)
-	}
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SUITE\tRUNS\tLATEST")
-	for _, s := range out {
-		fmt.Fprintf(w, "%s\t%d\t%s\n", s.Name, s.Runs, formatTime(s.LatestRun))
-	}
-	return w.Flush()
 }
 
 type SuiteClientSummary struct {
@@ -607,45 +657,43 @@ func colorInt(n int, green bool) string {
 	return fmt.Sprintf("%s%d%s", color, n, ansiReset)
 }
 
-func cmdRuns(args []string) error {
-	var cf commonFlags
-	fs := flag.NewFlagSet("runs", flag.ExitOnError)
-	addCommonFlags(fs, &cf)
-	all := fs.Bool("all", false, "show historical runs instead of only the latest per suite/client")
-	limit := fs.Int("limit", 0, "maximum rows to print, 0 for all")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	ctx := context.Background()
-	client := newClient(cf.baseURL)
-	runs, err := fetchListing(ctx, client, cf.group)
+func listGroupRuns(ctx context.Context, client *Client, group string, gf groupsFlags) error {
+	runs, err := fetchListing(ctx, client, group)
 	if err != nil {
 		return err
 	}
 	latestMode := "latest"
-	if *all {
+	if gf.all {
 		latestMode = ""
 	}
-	runs = filterRuns(runs, cf.suite, cf.client, latestMode)
+	runs = filterRuns(runs, "", gf.client, latestMode)
 	sortRunsForDisplay(runs)
-	if *limit > 0 && len(runs) > *limit {
-		runs = runs[:*limit]
+	if gf.limit > 0 && len(runs) > gf.limit {
+		runs = runs[:gf.limit]
 	}
-	if cf.json {
+	if gf.json {
 		return writePrettyJSON(os.Stdout, runs)
 	}
 
-	w := newTextTable(os.Stdout, []string{"START", "SUITE", "CLIENTS", "PASS", "FAIL", "FILE"}, []bool{false, false, false, true, true, false})
+	headers := []string{"START", "SUITE", "CLIENTS", "PASS", "FAIL"}
+	right := []bool{false, false, false, true, true}
+	if gf.showFiles {
+		headers = append(headers, "FILE")
+		right = append(right, false)
+	}
+	w := newTextTable(os.Stdout, headers, right)
 	for _, run := range runs {
-		w.addRow(
+		row := []tableCell{
 			textCell(formatTime(run.Start)),
 			textCell(run.Name),
 			textCell(strings.Join(normalizedSortedClients(run.Clients), ",")),
 			passCell(run.Passes),
 			failCell(run.Fails),
-			textCell(run.FileName),
-		)
+		}
+		if gf.showFiles {
+			row = append(row, textCell(run.FileName))
+		}
+		w.addRow(row...)
 	}
 	w.flush()
 	return nil

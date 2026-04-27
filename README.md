@@ -31,30 +31,27 @@ List groups:
 go run . groups
 ```
 
-List simulators (suites) available in a group, with run counts and the latest
-run timestamp:
+Show the latest run for each suite/client in a group:
 
 ```sh
 go run . groups generic
 ```
+
+Filter the group view by client:
+
+```sh
+go run . groups generic --client go-ethereum
+```
+
+Add `--all` when you want to include older runs, then add `--files` to print
+file names for `--run-file` on `list` or `fetch`. Add `--limit N` when you want
+to cap the number of rows printed.
 
 Show per-client pass/fail counts for the latest run of a simulator:
 
 ```sh
 go run . groups generic engine-api
 ```
-
-Find the latest run for each suite/client:
-
-```sh
-go run . runs --group generic --suite eels/consume-engine --client go-ethereum
-```
-
-Omit `--suite` to show the latest runs from all suites, grouped alphabetically
-by suite and then client. Add `--all` when you want to include older runs, then
-use the printed file name with `--run-file` on `list` or `fetch` to inspect a
-specific older run. Add `--limit N` when you want to cap the number of rows
-printed.
 
 List failing tests in the latest matching run. `--test` is a case-insensitive
 substring by default, so full pytest ids can be pasted without escaping regex
