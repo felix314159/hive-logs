@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+var errNoClientLog = errors.New("no client log exists for this test")
+
 func fetchHiveLog(ctx context.Context, client *Client, group string, suite *SuiteResult, match TestMatch) ([]byte, error) {
 	if suite.TestDetailsLog == "" {
 		return []byte(match.Test.SummaryResult.Details), nil
@@ -30,7 +32,7 @@ func fetchHiveLog(ctx context.Context, client *Client, group string, suite *Suit
 
 func fetchClientLogs(ctx context.Context, client *Client, ff fetchFlags, match TestMatch) ([]byte, []string, error) {
 	if len(match.Test.ClientInfo) == 0 {
-		return nil, nil, errors.New("test has no clientInfo")
+		return nil, nil, errNoClientLog
 	}
 	infos := make([]ClientInfo, 0, len(match.Test.ClientInfo))
 	for _, info := range match.Test.ClientInfo {
@@ -64,7 +66,7 @@ func fetchClientLogs(ctx context.Context, client *Client, ff fetchFlags, match T
 		out.WriteByte('\n')
 	}
 	if len(files) == 0 {
-		return nil, nil, errors.New("test has no client log files")
+		return nil, nil, errNoClientLog
 	}
 	return out.Bytes(), files, nil
 }

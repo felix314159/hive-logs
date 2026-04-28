@@ -106,7 +106,7 @@ func TestFetchClientLogsReportsNoFiles(t *testing.T) {
 	_, _, err := fetchClientLogs(context.Background(), newClient("http://unused"), fetchFlags{}, TestMatch{
 		Test: TestCase{ClientInfo: map[string]ClientInfo{"1": {ID: "1"}}},
 	})
-	if err == nil || !strings.Contains(err.Error(), "no client log files") {
+	if err == nil || !strings.Contains(err.Error(), "no client log exists for this test") {
 		t.Fatalf("err = %v", err)
 	}
 }

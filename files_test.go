@@ -138,3 +138,139 @@ func TestFetchBundleWritesSummaryLogsAndReproduceCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFetchBundleWritesNoClientLogPlaceholder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/generic/results/details.log":
+			w.Write([]byte("hive-log-data"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	run := ListingRun{
+		Name:     "suite-a",
+		Clients:  []string{"go-ethereum"},
+		Start:    time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC),
+		FileName: "run.json",
+	}
+	suite := &SuiteResult{Name: "suite-a", TestDetailsLog: "details.log"}
+	match := TestMatch{TestID: "1", Test: TestCase{
+		Name:          "failing test",
+		SummaryResult: SummaryResult{Log: &LogRange{Begin: 0, End: 4}},
+	}}
+
+	bundle, err := fetchBundle(context.Background(), newClient(server.URL), fetchFlags{
+		common: commonFlags{group: "generic", suite: "suite-a", client: "geth"},
+		outDir: t.TempDir(),
+	}, run, suite, match)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientLog, err := os.ReadFile(bundle.ClientLogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(clientLog) != "no client log exists for this test\n" {
+		t.Fatalf("client log = %q", clientLog)
+	}
+}
+
+func TestFetchBundleRPCCompatWritesClientLaunchLogAndReference(t *testing.T) {
+	var launchRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/generic/results/details.log":
+			w.Write([]byte("hive-log-data"))
+		case "/generic/results/launch.log":
+			launchRequests++
+			if got := r.Header.Get("Range"); got != "" {
+				t.Fatalf("client launch Range = %q", got)
+			}
+			w.Write([]byte("launch-log-data"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	run := ListingRun{
+		Name:     "rpc-compat",
+		Clients:  []string{"go-ethereum"},
+		Start:    time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC),
+		FileName: "run.json",
+	}
+	suite := &SuiteResult{
+		Name:           "rpc-compat",
+		TestDetailsLog: "details.log",
+		TestCases: map[string]TestCase{
+			"0": {
+				Name: "client launch (go-ethereum_default)",
+				ClientInfo: map[string]ClientInfo{
+					"1": {ID: "1", Name: "go-ethereum_default", LogFile: "launch.log", LogOffsets: &LogRange{Begin: 1, End: 3}},
+				},
+			},
+		},
+	}
+	match := TestMatch{TestID: "1", Test: TestCase{
+		Name:          "rpc failing test",
+		SummaryResult: SummaryResult{Log: &LogRange{Begin: 0, End: 4}},
+	}}
+
+	outDir := t.TempDir()
+	bundle, err := fetchBundle(context.Background(), newClient(server.URL), fetchFlags{
+		common: commonFlags{group: "generic", suite: "rpc-compat", client: "geth"},
+		outDir: outDir,
+	}, run, suite, match)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	launchPath := filepath.Join(outDir, "generic", "rpc-compat", "go-ethereum", "client_launch.log")
+	launchLog, err := os.ReadFile(launchPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(launchLog), "launch-log-data") {
+		t.Fatalf("client launch log = %q", launchLog)
+	}
+	if launchRequests != 1 {
+		t.Fatalf("launch requests = %d", launchRequests)
+	}
+
+	clientLog, err := os.ReadFile(bundle.ClientLogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "no client log exists for this test; see ../client_launch.log for the rpc-compat client launch log\n"
+	if string(clientLog) != want {
+		t.Fatalf("client log = %q, want %q", clientLog, want)
+	}
+}
+
+func TestFindRPCCompatClientLaunchPrefersRequestedClient(t *testing.T) {
+	suite := &SuiteResult{TestCases: map[string]TestCase{
+		"1": {
+			Name: "client launch (reth_default)",
+			ClientInfo: map[string]ClientInfo{
+				"1": {Name: "reth_default", LogFile: "reth_default/client.log"},
+			},
+		},
+		"2": {
+			Name: "client launch (go-ethereum_default)",
+			ClientInfo: map[string]ClientInfo{
+				"1": {Name: "go-ethereum_default", LogFile: "go-ethereum_default/client.log"},
+			},
+		},
+	}}
+
+	match, ok := findRPCCompatClientLaunch(suite, "geth")
+	if !ok {
+		t.Fatal("client launch not found")
+	}
+	if match.TestID != "2" {
+		t.Fatalf("matched test id = %q", match.TestID)
+	}
+}

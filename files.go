@@ -5,10 +5,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+)
+
+var (
+	rpcCompatLaunchLogMu    sync.Mutex
+	rpcCompatLaunchLogCache = make(map[string]string)
 )
 
 func fetchBundle(ctx context.Context, client *Client, ff fetchFlags, run ListingRun, suite *SuiteResult, match TestMatch) (BundleSummary, error) {
@@ -36,7 +43,19 @@ func fetchBundle(ctx context.Context, client *Client, ff fetchFlags, run Listing
 	clientPath := filepath.Join(dir, clientLogName)
 	clientLog, clientFiles, err := fetchClientLogs(ctx, client, ff, match)
 	if err != nil {
-		clientLog = []byte(fmt.Sprintf("failed to fetch client log: %v\n", err))
+		if errors.Is(err, errNoClientLog) {
+			clientLog = missingClientLogMessage()
+			if isRPCCompatSuite(ff.common.suite, suite.Name) {
+				launchPath, launchErr := ensureRPCCompatClientLaunchLog(ctx, client, ff, run, suite)
+				if launchErr == nil {
+					clientLog = rpcCompatClientLogReference(clientPath, launchPath)
+				} else {
+					clientLog = append(clientLog, []byte(fmt.Sprintf("failed to fetch rpc-compat client launch log: %v\n", launchErr))...)
+				}
+			}
+		} else {
+			clientLog = []byte(fmt.Sprintf("failed to fetch client log: %v\n", err))
+		}
 	}
 	if err := os.WriteFile(clientPath, clientLog, 0o644); err != nil {
 		return BundleSummary{}, err
@@ -59,6 +78,112 @@ func fetchBundle(ctx context.Context, client *Client, ff fetchFlags, run Listing
 		TestID:                match.TestID,
 		RunFile:               run.FileName,
 	}, nil
+}
+
+func missingClientLogMessage() []byte {
+	return []byte("no client log exists for this test\n")
+}
+
+func isRPCCompatSuite(names ...string) bool {
+	for _, name := range names {
+		if name == "rpc-compat" || simulatorName(name) == "rpc-compat" {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureRPCCompatClientLaunchLog(ctx context.Context, client *Client, ff fetchFlags, run ListingRun, suite *SuiteResult) (string, error) {
+	launch, ok := findRPCCompatClientLaunch(suite, ff.common.client)
+	if !ok {
+		return "", errors.New("rpc-compat client launch test not found")
+	}
+
+	dir := filepath.Join(
+		ff.outDir,
+		sanitizeFileName(ff.common.group),
+		sanitizePathSegments(ff.common.suite),
+		sanitizeFileName(normalizeClient(ff.common.client)),
+	)
+	path := filepath.Join(dir, "client_launch.log")
+	cacheKey := run.FileName + "\x00" + path
+
+	rpcCompatLaunchLogMu.Lock()
+	if cached, ok := rpcCompatLaunchLogCache[cacheKey]; ok {
+		rpcCompatLaunchLogMu.Unlock()
+		return cached, nil
+	}
+	rpcCompatLaunchLogMu.Unlock()
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	launchFlags := ff
+	launchFlags.fullClient = true
+	data, _, err := fetchClientLogs(ctx, client, launchFlags, launch)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return "", err
+	}
+
+	rpcCompatLaunchLogMu.Lock()
+	rpcCompatLaunchLogCache[cacheKey] = path
+	rpcCompatLaunchLogMu.Unlock()
+	return path, nil
+}
+
+func findRPCCompatClientLaunch(suite *SuiteResult, clientName string) (TestMatch, bool) {
+	var fallback TestMatch
+	foundFallback := false
+	for id, tc := range suite.TestCases {
+		if !isRPCCompatClientLaunchName(tc.Name) {
+			continue
+		}
+		match := TestMatch{TestID: id, Test: tc}
+		if clientLaunchMatchesClient(tc, clientName) {
+			return match, true
+		}
+		if !foundFallback {
+			fallback = match
+			foundFallback = true
+		}
+	}
+	if foundFallback {
+		return fallback, true
+	}
+	return TestMatch{}, false
+}
+
+func isRPCCompatClientLaunchName(name string) bool {
+	name = strings.TrimSpace(strings.ToLower(name))
+	return name == "client launch" || strings.HasPrefix(name, "client launch ")
+}
+
+func clientLaunchMatchesClient(tc TestCase, clientName string) bool {
+	want := normalizeClient(clientName)
+	if want == "" {
+		return true
+	}
+	for _, info := range tc.ClientInfo {
+		if normalizeClient(info.Name) == want {
+			return true
+		}
+		if strings.HasPrefix(info.LogFile, clientName+"/") || strings.HasPrefix(info.LogFile, want+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func rpcCompatClientLogReference(clientPath, launchPath string) []byte {
+	ref, err := filepath.Rel(filepath.Dir(clientPath), launchPath)
+	if err != nil {
+		ref = launchPath
+	}
+	ref = filepath.ToSlash(ref)
+	return []byte(fmt.Sprintf("no client log exists for this test; see %s for the rpc-compat client launch log\n", ref))
 }
 
 func writeReproduceCommands(path string, meta FailureMetadata, hiveLogName, clientLogName string) error {
