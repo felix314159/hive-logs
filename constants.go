@@ -1,3 +1,4 @@
+// Package main records the external Hive deployment paths, URLs, and client names that hive-logs depends on.
 package main
 
 // External assumptions about the Hive deployment we point at.
