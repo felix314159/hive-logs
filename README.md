@@ -34,7 +34,7 @@ go run . list
 Show the latest run for each suite/client in a group:
 
 ```sh
-go run . groups generic
+go run . group=generic
 ```
 
 Add `--all` when you want to include older runs, then add `--files` to print
@@ -43,14 +43,14 @@ file names. Add `--limit N` when you want to cap the number of rows printed.
 Show per-client pass/fail counts for the latest run of a simulator:
 
 ```sh
-go run . groups generic engine-api
+go run . group=generic suite=engine-api
 ```
 
 List failing tests for a client in the latest matching run and fetch all failure
 bundles into `./logs`:
 
 ```sh
-go run . groups generic eels/consume-engine go-ethereum
+go run . group=generic suite=eels/consume-engine client=go-ethereum
 ```
 
 Each bundle contains:
@@ -66,5 +66,5 @@ Imagine client `go-ethereum` fails the simulator `consume-engine` for test
 `tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_tx[fork_Cancun-tx_type_0-blockchain_test_engine_from_state_test-non-empty-balance-correct-initcode]`, so now to fetch the latest failing logs for the suite and client run:
 
 ```go
-go run . groups generic eels/consume-engine go-ethereum
+go run . group=generic suite=eels/consume-engine client=go-ethereum
 ```

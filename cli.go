@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -27,22 +28,39 @@ func run(args []string) error {
 		return nil
 	}
 
+	if hasQueryArg(args) {
+		return cmdQuery(args)
+	}
+
 	cmd := args[0]
 	args = args[1:]
 
 	switch cmd {
 	case "list":
 		return cmdList(args)
-	case "groups":
-		return cmdGroups(args)
-	case "suites":
-		return cmdSuites(args)
-	case "clients":
-		return cmdClients(args)
 	default:
 		printUsage(os.Stderr)
 		return fmt.Errorf("unknown command %q", cmd)
 	}
+}
+
+// hasQueryArg returns true if any positional argument uses the
+// key=value query syntax (group=, suite=, client=).
+func hasQueryArg(args []string) bool {
+	for _, a := range args {
+		if strings.HasPrefix(a, "--") {
+			continue
+		}
+		name, _, ok := strings.Cut(a, "=")
+		if !ok {
+			continue
+		}
+		switch name {
+		case "group", "suite", "client":
+			return true
+		}
+	}
+	return false
 }
 
 func printUsage(w io.Writer) {
@@ -51,12 +69,12 @@ func printUsage(w io.Writer) {
 Usage:
   list [--json]
       List result groups, suites, and known clients.
-  groups GROUP [--all] [--files] [--limit N] [--json]
+  group=GROUP [--all] [--files] [--limit N] [--json]
       Print the latest matching Hive runs grouped by suite, then client.
       --all includes older runs; --files prints run file names.
-  groups GROUP SUITE [--json]
+  group=GROUP suite=SUITE [--json]
       Per-client pass/fail counts, run start, and duration for the latest SUITE run in GROUP.
-  groups GROUP SUITE CLIENT [--json]
+  group=GROUP suite=SUITE client=CLIENT [--json]
       List CLIENT's failing tests in the latest SUITE run and download
       hive.log + <CLIENT>.log bundles for each into ./logs.
 `)

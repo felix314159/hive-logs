@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestGroupsShowsLatestRunForEverySuite(t *testing.T) {
+func TestQueryGroupShowsLatestRunForEverySuite(t *testing.T) {
 	runs := append(sampleRuns(51), ListingRun{
 		Name:     "eels/consume-engine",
 		NTests:   40523,
@@ -34,20 +34,20 @@ func TestGroupsShowsLatestRunForEverySuite(t *testing.T) {
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdGroups([]string{"--base-url", server.URL, "generic"})
+		return cmdQuery([]string{"--base-url", server.URL, "group=generic"})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output, "eels/consume-engine") {
-		t.Fatalf("groups output did not include eels/consume-engine:\n%s", output)
+		t.Fatalf("query output did not include eels/consume-engine:\n%s", output)
 	}
 	if strings.Contains(output, "2026-04-25") {
-		t.Fatalf("default groups output included older eels run:\n%s", output)
+		t.Fatalf("default query output included older eels run:\n%s", output)
 	}
 }
 
-func TestGroupsAllShowsOlderRuns(t *testing.T) {
+func TestQueryGroupAllShowsOlderRuns(t *testing.T) {
 	server := listingServer(t, []ListingRun{
 		{
 			Name:     "eels/consume-engine",
@@ -71,17 +71,17 @@ func TestGroupsAllShowsOlderRuns(t *testing.T) {
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdGroups([]string{"--base-url", server.URL, "generic", "--all"})
+		return cmdQuery([]string{"--base-url", server.URL, "group=generic", "--all"})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output, "2026-04-25") {
-		t.Fatalf("groups --all output did not include older eels run:\n%s", output)
+		t.Fatalf("query --all output did not include older eels run:\n%s", output)
 	}
 }
 
-func TestGroupsOutputSortedBySuiteThenClient(t *testing.T) {
+func TestQueryGroupOutputSortedBySuiteThenClient(t *testing.T) {
 	server := listingServer(t, []ListingRun{
 		{
 			Name:     "rpc-compat",
@@ -119,7 +119,7 @@ func TestGroupsOutputSortedBySuiteThenClient(t *testing.T) {
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdGroups([]string{"--base-url", server.URL, "generic"})
+		return cmdQuery([]string{"--base-url", server.URL, "group=generic"})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestGroupsOutputSortedBySuiteThenClient(t *testing.T) {
 	assertLineBefore(t, output, []string{"graphql", "go-ethereum"}, []string{"rpc-compat", "reth"})
 }
 
-func TestGroupsClientFlagRemoved(t *testing.T) {
+func TestQueryClientFlagRemoved(t *testing.T) {
 	server := listingServer(t, []ListingRun{
 		{
 			Name:     "suite-a",
@@ -152,14 +152,14 @@ func TestGroupsClientFlagRemoved(t *testing.T) {
 	defer server.Close()
 
 	_, err := captureStdout(func() error {
-		return cmdGroups([]string{"generic", "--base-url", server.URL, "--client", "go-ethereum"})
+		return cmdQuery([]string{"group=generic", "--base-url", server.URL, "--client", "go-ethereum"})
 	})
-	if err == nil || !strings.Contains(err.Error(), "unknown groups flag --client") {
-		t.Fatalf("groups --client err = %v, want unknown flag", err)
+	if err == nil || !strings.Contains(err.Error(), "unknown flag --client") {
+		t.Fatalf("--client err = %v, want unknown flag", err)
 	}
 }
 
-func TestGroupsSuitePositionReportsKnownClientName(t *testing.T) {
+func TestQuerySuitePositionReportsKnownClientName(t *testing.T) {
 	server := listingServer(t, []ListingRun{
 		{
 			Name:     "engine-api",
@@ -173,16 +173,16 @@ func TestGroupsSuitePositionReportsKnownClientName(t *testing.T) {
 	defer server.Close()
 
 	_, err := captureStdout(func() error {
-		return cmdGroups([]string{"--base-url", server.URL, "generic", "besu"})
+		return cmdQuery([]string{"--base-url", server.URL, "group=generic", "suite=besu"})
 	})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
 	for _, want := range []string{
-		`expected a suite name after group "generic"`,
+		`expected a suite name for group "generic"`,
 		`"besu" is a client name`,
-		`groups generic SUITE besu`,
-		`groups generic`,
+		`group=generic suite=SUITE client=besu`,
+		`group=generic`,
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error does not contain %q:\n%s", want, err)
@@ -190,7 +190,7 @@ func TestGroupsSuitePositionReportsKnownClientName(t *testing.T) {
 	}
 }
 
-func TestGroupsColorsPassFailCounts(t *testing.T) {
+func TestQueryColorsPassFailCounts(t *testing.T) {
 	server := listingServer(t, []ListingRun{
 		{
 			Name:     "suite-a",
@@ -212,7 +212,7 @@ func TestGroupsColorsPassFailCounts(t *testing.T) {
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdGroups([]string{"--base-url", server.URL, "generic"})
+		return cmdQuery([]string{"--base-url", server.URL, "group=generic"})
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -225,12 +225,12 @@ func TestGroupsColorsPassFailCounts(t *testing.T) {
 		ansiGreen + "0" + ansiReset,
 	} {
 		if !strings.Contains(output, want) {
-			t.Fatalf("groups output does not contain colored count %q:\n%s", want, output)
+			t.Fatalf("query output does not contain colored count %q:\n%s", want, output)
 		}
 	}
 }
 
-func TestGroupsOmitsFilesByDefaultAndShowsThemWithFlag(t *testing.T) {
+func TestQueryOmitsFilesByDefaultAndShowsThemWithFlag(t *testing.T) {
 	server := listingServer(t, []ListingRun{
 		{
 			Name:     "suite-a",
@@ -244,38 +244,63 @@ func TestGroupsOmitsFilesByDefaultAndShowsThemWithFlag(t *testing.T) {
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdGroups([]string{"--base-url", server.URL, "generic"})
+		return cmdQuery([]string{"--base-url", server.URL, "group=generic"})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(output, "FILE") || strings.Contains(output, "suite-a.json") {
-		t.Fatalf("groups output included file column by default:\n%s", output)
+		t.Fatalf("query output included file column by default:\n%s", output)
 	}
 
 	output, err = captureStdout(func() error {
-		return cmdGroups([]string{"--base-url", server.URL, "generic", "--files"})
+		return cmdQuery([]string{"--base-url", server.URL, "group=generic", "--files"})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(output, "FILE") || !strings.Contains(output, "suite-a.json") {
-		t.Fatalf("groups --files output did not include file column:\n%s", output)
+		t.Fatalf("query --files output did not include file column:\n%s", output)
 	}
 }
 
-func TestGroupsLimitStillCapsRows(t *testing.T) {
+func TestQueryLimitStillCapsRows(t *testing.T) {
 	server := listingServer(t, sampleRuns(3))
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return cmdGroups([]string{"--base-url", server.URL, "generic", "--limit", "2"})
+		return cmdQuery([]string{"--base-url", server.URL, "group=generic", "--limit", "2"})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := dataLineCount(output); got != 2 {
 		t.Fatalf("expected 2 run rows, got %d:\n%s", got, output)
+	}
+}
+
+func TestQueryUnknownGroupListsAvailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/discovery.json" {
+			fmt.Fprint(w, `[{"name":"generic"},{"name":"bal"},{"name":"bal-quick"}]`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	err := cmdQuery([]string{"--base-url", server.URL, "group=abc"})
+	if err == nil {
+		t.Fatal("expected error for unknown group")
+	}
+	for _, want := range []string{
+		`group "abc" does not exist`,
+		"available groups:",
+		"bal", "bal-quick", "generic",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error does not contain %q:\n%s", want, err)
+		}
 	}
 }
 
@@ -344,16 +369,19 @@ func dataLineCount(output string) int {
 func listingServer(t *testing.T, runs []ListingRun) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/generic/listing.jsonl" {
-			http.NotFound(w, r)
-			return
-		}
-		for _, run := range runs {
-			data, err := json.Marshal(run)
-			if err != nil {
-				t.Fatalf("marshal run: %v", err)
+		switch r.URL.Path {
+		case "/discovery.json":
+			fmt.Fprint(w, `[{"name":"generic"}]`)
+		case "/generic/listing.jsonl":
+			for _, run := range runs {
+				data, err := json.Marshal(run)
+				if err != nil {
+					t.Fatalf("marshal run: %v", err)
+				}
+				fmt.Fprintln(w, string(data))
 			}
-			fmt.Fprintln(w, string(data))
+		default:
+			http.NotFound(w, r)
 		}
 	}))
 }

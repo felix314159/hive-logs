@@ -11,58 +11,6 @@ import (
 	"time"
 )
 
-func TestCmdClientsJSON(t *testing.T) {
-	output, err := captureStdout(func() error {
-		return cmdClients([]string{"--json"})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var clients []string
-	if err := json.Unmarshal([]byte(output), &clients); err != nil {
-		t.Fatal(err)
-	}
-	if len(clients) == 0 || clients[0] != "besu" {
-		t.Fatalf("clients = %v", clients)
-	}
-}
-
-func TestCmdSuitesJSONListsLatestSuitePerGroup(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/discovery.json":
-			fmt.Fprint(w, `[{"name":"generic"},{"name":"bal"}]`)
-		case "/generic/listing.jsonl":
-			writeListingRuns(t, w, []ListingRun{
-				{Name: "suite-b", Start: time.Date(2026, 4, 27, 10, 0, 0, 0, time.UTC)},
-				{Name: "suite-a", Start: time.Date(2026, 4, 28, 10, 0, 0, 0, time.UTC)},
-			})
-		case "/bal/listing.jsonl":
-			writeListingRuns(t, w, []ListingRun{
-				{Name: "suite-c", Start: time.Date(2026, 4, 26, 10, 0, 0, 0, time.UTC)},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	output, err := captureStdout(func() error {
-		return cmdSuites([]string{"--base-url", server.URL, "--json"})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var suites []SuiteSummary
-	if err := json.Unmarshal([]byte(output), &suites); err != nil {
-		t.Fatal(err)
-	}
-	if len(suites) != 3 || suites[0].Group != "bal" || suites[0].Suite != "suite-c" ||
-		suites[1].Group != "generic" || suites[1].Suite != "suite-a" {
-		t.Fatalf("suites = %+v", suites)
-	}
-}
-
 func TestCmdListCombinesGroupsSuitesAndClients(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

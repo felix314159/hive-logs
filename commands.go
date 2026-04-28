@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,37 +16,86 @@ import (
 	"time"
 )
 
-func cmdGroups(args []string) error {
-	gf, rest, err := parseGroupsArgs(args)
+func cmdQuery(args []string) error {
+	qf, err := parseQueryArgs(args)
 	if err != nil {
 		return err
 	}
-	if len(rest) > 3 {
-		return fmt.Errorf("too many positional arguments for groups: %s", strings.Join(rest[3:], " "))
+	if qf.common.group == "" {
+		if qf.common.suite != "" || qf.common.client != "" {
+			return errors.New("group= is required when suite= or client= is set")
+		}
+		return errors.New("group= is required")
+	}
+	if qf.common.client != "" && qf.common.suite == "" {
+		return errors.New("client= requires suite= to be set")
 	}
 
 	ctx := context.Background()
-	client := newClient(gf.baseURL)
+	client := newClient(qf.baseURL)
 
-	if len(rest) > 0 {
-		if len(rest) == 3 {
-			return fetchSuiteClientFailures(ctx, client, rest[0], rest[1], rest[2], gf.json)
-		}
-		if len(rest) == 2 {
-			return listSuiteClients(ctx, client, rest[0], rest[1], gf.json)
-		}
-		return listGroupRuns(ctx, client, rest[0], gf)
+	if err := ensureGroupExists(ctx, client, qf.common.group); err != nil {
+		return err
 	}
 
-	summaries, err := fetchGroupSummaries(ctx, client, gf.baseURL)
+	if qf.common.client != "" {
+		return fetchSuiteClientFailures(ctx, client, qf.common.group, qf.common.suite, qf.common.client, qf.json)
+	}
+	if qf.common.suite != "" {
+		return listSuiteClients(ctx, client, qf.common.group, qf.common.suite, qf.json)
+	}
+	return listGroupRuns(ctx, client, qf.common.group, qf)
+}
+
+// availableSuites returns the unique sorted suite names present in runs.
+func availableSuites(runs []ListingRun) []string {
+	seen := make(map[string]bool)
+	for _, r := range runs {
+		if r.Name != "" {
+			seen[r.Name] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// availableClients returns the unique sorted normalized client names that
+// participated in any of the given runs.
+func availableClients(runs []ListingRun) []string {
+	seen := make(map[string]bool)
+	for _, r := range runs {
+		for _, c := range normalizedClients(r.Clients) {
+			seen[c] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ensureGroupExists fails with a list of available groups when group is not in
+// the Hive discovery file.
+func ensureGroupExists(ctx context.Context, client *Client, group string) error {
+	groups, err := fetchGroups(ctx, client)
 	if err != nil {
 		return err
 	}
-	if gf.json {
-		return writePrettyJSON(os.Stdout, summaries)
+	names := make([]string, 0, len(groups))
+	for _, g := range groups {
+		if g.Name == group {
+			return nil
+		}
+		names = append(names, g.Name)
 	}
-	writeGroupSummaries(os.Stdout, summaries)
-	return nil
+	sort.Strings(names)
+	return fmt.Errorf("group %q does not exist; available groups: %s", group, strings.Join(names, ", "))
 }
 
 func writeGroupSummaries(w io.Writer, summaries []GroupSummary) {
@@ -73,33 +123,6 @@ type SuiteSummary struct {
 	Latest time.Time `json:"latest"`
 }
 
-func cmdSuites(args []string) error {
-	var baseURL string
-	var jsonOut bool
-	fs := flag.NewFlagSet("suites", flag.ExitOnError)
-	fs.StringVar(&baseURL, "base-url", defaultBaseURL, "Hive results origin")
-	fs.BoolVar(&jsonOut, "json", false, "emit JSON")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected arguments for suites: %s", strings.Join(fs.Args(), " "))
-	}
-
-	ctx := context.Background()
-	client := newClient(baseURL)
-	entries, err := fetchSuiteSummaries(ctx, client)
-	if err != nil {
-		return err
-	}
-
-	if jsonOut {
-		return writePrettyJSON(os.Stdout, entries)
-	}
-	writeSuiteSummaries(os.Stdout, entries)
-	return nil
-}
-
 func writeSuiteSummaries(w io.Writer, entries []SuiteSummary) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "SUITE\tGROUP\tLATEST")
@@ -111,26 +134,6 @@ func writeSuiteSummaries(w io.Writer, entries []SuiteSummary) {
 		fmt.Fprintf(tw, "%s\t%s\t%s\n", e.Suite, e.Group, latest)
 	}
 	tw.Flush()
-}
-
-func cmdClients(args []string) error {
-	var jsonOut bool
-	fs := flag.NewFlagSet("clients", flag.ExitOnError)
-	fs.BoolVar(&jsonOut, "json", false, "emit JSON")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected arguments for clients: %s", strings.Join(fs.Args(), " "))
-	}
-
-	if jsonOut {
-		return writePrettyJSON(os.Stdout, hiveKnownClients)
-	}
-	for _, c := range hiveKnownClients {
-		fmt.Println(c)
-	}
-	return nil
 }
 
 type ListSummary struct {
@@ -289,7 +292,7 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 	if len(matches) == 0 {
 		if isKnownClientName(suite) {
 			return fmt.Errorf(
-				"expected a suite name after group %q, but %q is a client name; client must be the third positional argument, as in `groups %s SUITE %s`; use `groups %s` to list suites and clients in this group",
+				"expected a suite name for group %q, but %q is a client name; specify it as `group=%s suite=SUITE client=%s`; use `group=%s` to list suites and clients in this group",
 				group,
 				suite,
 				group,
@@ -297,7 +300,7 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 				group,
 			)
 		}
-		return fmt.Errorf("no runs found for group=%s suite=%s", group, suite)
+		return fmt.Errorf("suite %q does not exist; available suites for group %q: %s", suite, group, strings.Join(availableSuites(runs), ", "))
 	}
 
 	seen := make(map[string]bool)
@@ -402,9 +405,13 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 	if err != nil {
 		return err
 	}
+	suiteRuns := filterRuns(runs, suite, "", "latest")
+	if len(suiteRuns) == 0 {
+		return fmt.Errorf("suite %q does not exist; available suites for group %q: %s", suite, group, strings.Join(availableSuites(runs), ", "))
+	}
 	matches := filterRuns(runs, suite, clientName, "latest")
 	if len(matches) == 0 {
-		return fmt.Errorf("no run found for group=%s suite=%s client=%s", group, suite, clientName)
+		return fmt.Errorf("client %q did not run suite %q in group %q; available clients: %s", clientName, suite, group, strings.Join(availableClients(suiteRuns), ", "))
 	}
 	sortRunsNewestFirst(matches)
 	run := matches[0]
@@ -501,27 +508,27 @@ func suiteDuration(suite *SuiteResult) time.Duration {
 	return end.Sub(start)
 }
 
-func listGroupRuns(ctx context.Context, client *Client, group string, gf groupsFlags) error {
+func listGroupRuns(ctx context.Context, client *Client, group string, qf queryFlags) error {
 	runs, err := fetchListing(ctx, client, group)
 	if err != nil {
 		return err
 	}
 	latestMode := "latest"
-	if gf.all {
+	if qf.all {
 		latestMode = ""
 	}
 	runs = filterRuns(runs, "", "", latestMode)
 	sortRunsForDisplay(runs)
-	if gf.limit > 0 && len(runs) > gf.limit {
-		runs = runs[:gf.limit]
+	if qf.limit > 0 && len(runs) > qf.limit {
+		runs = runs[:qf.limit]
 	}
-	if gf.json {
+	if qf.json {
 		return writePrettyJSON(os.Stdout, runs)
 	}
 
 	headers := []string{"START", "SUITE", "CLIENTS", "PASS", "FAIL"}
 	right := []bool{false, false, false, true, true}
-	if gf.showFiles {
+	if qf.showFiles {
 		headers = append(headers, "FILE")
 		right = append(right, false)
 	}
@@ -534,7 +541,7 @@ func listGroupRuns(ctx context.Context, client *Client, group string, gf groupsF
 			passCell(run.Passes),
 			failCell(run.Fails),
 		}
-		if gf.showFiles {
+		if qf.showFiles {
 			row = append(row, textCell(run.FileName))
 		}
 		w.addRow(row...)
