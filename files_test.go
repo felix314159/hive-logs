@@ -27,6 +27,52 @@ func TestSanitizeAndBundleDirName(t *testing.T) {
 	}
 }
 
+func TestBundleDirNameSplitsPytestStyleNames(t *testing.T) {
+	run := ListingRun{FileName: "run.json"}
+	dirA := bundleDirName("bal", "eels/consume-engine", "nimbus-el", run, TestMatch{
+		TestID: "12",
+		Test: TestCase{Name: "tests/prague/eip7002_el_triggerable_withdrawals/test_withdrawal_requests.py" +
+			"::test_withdrawal_requests[fork_Amsterdam-blockchain_test_engine-single_block_single_withdrawal_request_from_contract_call_depth_3]-nimbus-el_default"},
+	})
+	dirB := bundleDirName("bal", "eels/consume-engine", "nimbus-el", run, TestMatch{
+		TestID: "13",
+		Test: TestCase{Name: "tests/prague/eip7002_el_triggerable_withdrawals/test_withdrawal_requests.py" +
+			"::test_withdrawal_requests[fork_Amsterdam-blockchain_test_engine-single_block_single_withdrawal_request_from_contract_call_depth_high]-nimbus-el_default"},
+	})
+	if dirA == dirB {
+		t.Fatalf("bundle dirs collide: %q", dirA)
+	}
+	wantPrefix := filepath.Join("bal", "eels", "consume-engine", "nimbus-el",
+		"tests-prague-eip7002-el-triggerable-withdrawals-test-withdrawal-requests-py-run") + string(filepath.Separator)
+	if !strings.HasPrefix(dirA, wantPrefix) {
+		t.Fatalf("dirA missing file-level prefix %q: %q", wantPrefix, dirA)
+	}
+	if !strings.HasSuffix(dirA, "-12") {
+		t.Fatalf("dirA missing test-id suffix: %q", dirA)
+	}
+	if !strings.HasSuffix(dirB, "-13") {
+		t.Fatalf("dirB missing test-id suffix: %q", dirB)
+	}
+}
+
+func TestSplitTestName(t *testing.T) {
+	cases := []struct {
+		name       string
+		wantFile   string
+		wantVector string
+	}{
+		{"tests/foo.py::test_bar[x]-geth", "tests/foo.py", "test_bar[x]-geth"},
+		{"plain test name", "", "plain test name"},
+		{"::leading", "", "leading"},
+	}
+	for _, tc := range cases {
+		gotFile, gotVector := splitTestName(tc.name)
+		if gotFile != tc.wantFile || gotVector != tc.wantVector {
+			t.Fatalf("splitTestName(%q) = (%q, %q), want (%q, %q)", tc.name, gotFile, gotVector, tc.wantFile, tc.wantVector)
+		}
+	}
+}
+
 func TestWriteJSONFileAndReproduceCommands(t *testing.T) {
 	dir := t.TempDir()
 	jsonPath := filepath.Join(dir, "summary.json")

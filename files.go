@@ -66,6 +66,7 @@ func fetchBundle(ctx context.Context, client *Client, ff fetchFlags, run Listing
 		return BundleSummary{}, err
 	}
 
+	testFile, testVector := splitTestName(match.Test.Name)
 	return BundleSummary{
 		Directory:             dir,
 		WebsiteURL:            meta.WebsiteURL,
@@ -75,6 +76,8 @@ func fetchBundle(ctx context.Context, client *Client, ff fetchFlags, run Listing
 		ClientLogPath:         clientPath,
 		ClientLogs:            clientFiles,
 		TestName:              match.Test.Name,
+		TestFile:              testFile,
+		TestVector:            testVector,
 		TestID:                match.TestID,
 		RunFile:               run.FileName,
 	}, nil
@@ -216,18 +219,49 @@ func writeJSONFile(path string, v any) error {
 }
 
 func bundleDirName(group, suite, client string, run ListingRun, match TestMatch) string {
-	name := sanitizeFileName(match.Test.Name)
-	if len(name) > 90 {
-		name = name[:90]
-	}
-	leaf := name + "-" + strings.TrimSuffix(run.FileName, ".json")
-	full := filepath.Join(
+	file, vector := splitTestName(match.Test.Name)
+	runSuffix := strings.TrimSuffix(run.FileName, ".json")
+	base := filepath.Join(
 		sanitizeFileName(group),
 		sanitizePathSegments(suite),
 		sanitizeFileName(normalizeClient(client)),
-		leaf,
 	)
-	return strings.ToLower(full)
+
+	if file != "" {
+		fileLeaf := truncateBundleName(sanitizeFileName(file)) + "-" + runSuffix
+		return strings.ToLower(filepath.Join(base, fileLeaf, bundleVectorLeaf(vector, match.TestID)))
+	}
+
+	leaf := bundleVectorLeaf(match.Test.Name, match.TestID) + "-" + runSuffix
+	return strings.ToLower(filepath.Join(base, leaf))
+}
+
+// bundleVectorLeaf builds the per-vector directory name. The test ID is
+// always appended when present so two vectors that share a sanitized prefix
+// (e.g. after truncation) still land in distinct directories.
+func bundleVectorLeaf(vector, testID string) string {
+	name := truncateBundleName(sanitizeFileName(vector))
+	if testID == "" {
+		if name == "" {
+			return "test"
+		}
+		return name
+	}
+	if name == "" {
+		return "test-" + testID
+	}
+	return name + "-" + testID
+}
+
+// truncateBundleName caps a sanitized name at a length that keeps the full
+// path well under common filesystem limits. The trailing dash, if any, is
+// stripped so the next segment joins cleanly.
+func truncateBundleName(name string) string {
+	const maxLen = 120
+	if len(name) <= maxLen {
+		return name
+	}
+	return strings.TrimRight(name[:maxLen], "-")
 }
 
 // sanitizePathSegments sanitizes each `/`-separated segment so e.g.

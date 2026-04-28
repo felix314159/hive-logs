@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -117,6 +118,96 @@ func TestListSuiteClientsAddsDurationAndVersionMetadata(t *testing.T) {
 	if len(decoded.Clients) != 1 || decoded.Clients[0].Duration != 5*time.Second ||
 		decoded.Clients[0].Version != "1.15.0" || decoded.Clients[0].Commit != "abcdef1" {
 		t.Fatalf("clients = %+v", decoded.Clients)
+	}
+}
+
+func TestFormatVectorFileCount(t *testing.T) {
+	cases := []struct {
+		vectors, files int
+		want           string
+	}{
+		{14, 1, "14 failing test vectors in 1 test file"},
+		{1, 1, "1 failing test vector in 1 test file"},
+		{5, 3, "5 failing test vectors in 3 test files"},
+		{2, 0, "2 failing test vectors"},
+	}
+	for _, tc := range cases {
+		if got := formatVectorFileCount(tc.vectors, tc.files); got != tc.want {
+			t.Fatalf("formatVectorFileCount(%d, %d) = %q, want %q", tc.vectors, tc.files, got, tc.want)
+		}
+	}
+}
+
+func TestCountTestFilesIgnoresEmpty(t *testing.T) {
+	bundles := []BundleSummary{
+		{TestFile: "tests/foo.py"},
+		{TestFile: "tests/foo.py"},
+		{TestFile: "tests/bar.py"},
+		{TestFile: ""},
+	}
+	if got := countTestFiles(bundles); got != 2 {
+		t.Fatalf("countTestFiles = %d, want 2", got)
+	}
+}
+
+func TestPrintBundlesGroupedByFile(t *testing.T) {
+	bundles := []BundleSummary{
+		{
+			TestName:              "tests/foo.py::test_a[x]",
+			TestFile:              "tests/foo.py",
+			TestVector:            "test_a[x]",
+			HiveLogPath:           "logs/foo/a/hive.log",
+			ClientLogPath:         "logs/foo/a/client.log",
+			ReproduceCommandsPath: "logs/foo/a/reproduce_commands.md",
+		},
+		{
+			TestName:              "tests/foo.py::test_a[y]",
+			TestFile:              "tests/foo.py",
+			TestVector:            "test_a[y]",
+			HiveLogPath:           "logs/foo/b/hive.log",
+			ClientLogPath:         "logs/foo/b/client.log",
+			ReproduceCommandsPath: "logs/foo/b/reproduce_commands.md",
+		},
+		{
+			TestName:              "tests/bar.py::test_z",
+			TestFile:              "tests/bar.py",
+			TestVector:            "test_z",
+			HiveLogPath:           "logs/bar/z/hive.log",
+			ClientLogPath:         "logs/bar/z/client.log",
+			ReproduceCommandsPath: "logs/bar/z/reproduce_commands.md",
+		},
+	}
+	var buf bytes.Buffer
+	printBundlesGroupedByFile(&buf, bundles)
+	out := buf.String()
+	if !strings.Contains(out, "tests/foo.py\n  • test_a[x]") {
+		t.Fatalf("missing foo.py header with indented bullet:\n%s", out)
+	}
+	if !strings.Contains(out, "  • test_a[y]") {
+		t.Fatalf("missing second foo.py vector:\n%s", out)
+	}
+	if !strings.Contains(out, "tests/bar.py\n  • test_z") {
+		t.Fatalf("missing bar.py header with indented bullet:\n%s", out)
+	}
+	fooIdx := strings.Index(out, "tests/foo.py")
+	barIdx := strings.Index(out, "tests/bar.py")
+	if fooIdx == -1 || barIdx == -1 || fooIdx > barIdx {
+		t.Fatalf("groups out of order:\n%s", out)
+	}
+}
+
+func TestPrintBundlesGroupedByFileNoFile(t *testing.T) {
+	bundles := []BundleSummary{
+		{TestName: "client launch", HiveLogPath: "h", ClientLogPath: "c", ReproduceCommandsPath: "r"},
+	}
+	var buf bytes.Buffer
+	printBundlesGroupedByFile(&buf, bundles)
+	out := buf.String()
+	if strings.Contains(out, "  •") {
+		t.Fatalf("unexpected indentation when no file is present:\n%s", out)
+	}
+	if !strings.HasPrefix(out, "• client launch\n") {
+		t.Fatalf("expected unindented bullet, got:\n%s", out)
 	}
 }
 

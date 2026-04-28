@@ -63,3 +63,14 @@ func sortMatches(matches []TestMatch) {
 		return matches[i].TestID < matches[j].TestID
 	})
 }
+
+// splitTestName splits a pytest-style test name into the test file path and
+// the test vector portion. For names that contain "::" (e.g.
+// "tests/foo.py::test_bar[x]-client") the prefix is the file and the suffix
+// is the vector. Names without "::" return ("", name).
+func splitTestName(name string) (file, vector string) {
+	if i := strings.Index(name, "::"); i >= 0 {
+		return name[:i], name[i+2:]
+	}
+	return "", name
+}

@@ -18,6 +18,8 @@ type BundleSummary struct {
 	ClientLogPath         string   `json:"client_log_path"`
 	ClientLogs            []string `json:"client_logs"`
 	TestName              string   `json:"test_name"`
+	TestFile              string   `json:"test_file,omitempty"`
+	TestVector            string   `json:"test_vector"`
 	TestID                string   `json:"test_id"`
 	RunFile               string   `json:"run_file"`
 }

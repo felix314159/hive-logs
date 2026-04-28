@@ -469,19 +469,86 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 	if line := formatClientInfo(clientName, suiteClientBranch(suiteResult), clientCommit, clientVersion); line != "" {
 		fmt.Println(line)
 	}
-	word := "tests"
-	if len(bundles) == 1 {
-		word = "test"
-	}
-	fmt.Printf("url=%s\n%s%d failing %s%s\n\n",
-		bundles[0].WebsiteURL, ansiRed, len(bundles), word, ansiReset)
-	for _, b := range bundles {
-		fmt.Printf("• %s\n", b.TestName)
-		fmt.Printf("    hive log:    %s\n", b.HiveLogPath)
-		fmt.Printf("    client log:  %s\n", b.ClientLogPath)
-		fmt.Printf("    reproduce:   %s\n", b.ReproduceCommandsPath)
-	}
+	fileCount := countTestFiles(bundles)
+	fmt.Printf("url=%s\n%s%s%s\n\n",
+		bundles[0].WebsiteURL, ansiRed, formatVectorFileCount(len(bundles), fileCount), ansiReset)
+	printBundlesGroupedByFile(os.Stdout, bundles)
 	return nil
+}
+
+// formatVectorFileCount renders the red header line summarising how many
+// failing test vectors live in how many distinct test files.
+func formatVectorFileCount(vectorCount, fileCount int) string {
+	vectorWord := "test vectors"
+	if vectorCount == 1 {
+		vectorWord = "test vector"
+	}
+	if fileCount == 0 {
+		return fmt.Sprintf("%d failing %s", vectorCount, vectorWord)
+	}
+	fileWord := "test files"
+	if fileCount == 1 {
+		fileWord = "test file"
+	}
+	return fmt.Sprintf("%d failing %s in %d %s", vectorCount, vectorWord, fileCount, fileWord)
+}
+
+// countTestFiles returns the number of distinct, non-empty test file paths
+// across the given bundles.
+func countTestFiles(bundles []BundleSummary) int {
+	seen := make(map[string]struct{})
+	for _, b := range bundles {
+		if b.TestFile == "" {
+			continue
+		}
+		seen[b.TestFile] = struct{}{}
+	}
+	return len(seen)
+}
+
+// printBundlesGroupedByFile prints bundles grouped by their test file. Within
+// a group, bullets are indented under the file header. Bundles with no test
+// file (no `::` in the test name) are printed last with no header.
+func printBundlesGroupedByFile(w io.Writer, bundles []BundleSummary) {
+	type group struct {
+		file    string
+		bundles []BundleSummary
+	}
+	order := make([]string, 0)
+	groups := make(map[string]*group)
+	for _, b := range bundles {
+		g, ok := groups[b.TestFile]
+		if !ok {
+			g = &group{file: b.TestFile}
+			groups[b.TestFile] = g
+			order = append(order, b.TestFile)
+		}
+		g.bundles = append(g.bundles, b)
+	}
+
+	first := true
+	for _, key := range order {
+		g := groups[key]
+		if !first {
+			fmt.Fprintln(w)
+		}
+		first = false
+		bulletIndent := ""
+		if g.file != "" {
+			fmt.Fprintln(w, g.file)
+			bulletIndent = "  "
+		}
+		for _, b := range g.bundles {
+			label := b.TestVector
+			if label == "" {
+				label = b.TestName
+			}
+			fmt.Fprintf(w, "%s• %s\n", bulletIndent, label)
+			fmt.Fprintf(w, "%s    hive log:    %s\n", bulletIndent, b.HiveLogPath)
+			fmt.Fprintf(w, "%s    client log:  %s\n", bulletIndent, b.ClientLogPath)
+			fmt.Fprintf(w, "%s    reproduce:   %s\n", bulletIndent, b.ReproduceCommandsPath)
+		}
+	}
 }
 
 // fetchBundleConcurrency caps in-flight log downloads. Each bundle fetch
