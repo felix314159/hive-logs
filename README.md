@@ -1,11 +1,15 @@
 # hive-logs
 
 `hive-logs` is a direct CLI for the public EthPandaOps Hive result site.
-It finds logs for a result group, suite, and client, then fetches the two
-log sources needed for local LLM debugging:
+It exists to make two workflows easy:
 
-- `hive.log`: the per-test Hive/simulator detail log range
-- `client.log`: the per-test client log range(s)
+1. **Get an overview** of the latest Hive test results for your client across
+   groups and simulators — pass/fail counts, run metadata, and which tests
+   are failing.
+2. **Fetch the failing tests** of a specific simulator+client locally so an
+   LLM (or you) can analyze the failure reasons. Each failing test is saved
+   as a self-contained bundle of logs and metadata under `./logs`, ready to
+   hand to a code agent.
 
 The tool uses the static layout served by `https://hive.ethpandaops.io`:
 `discovery.json`, `<group>/listing.jsonl`, `<group>/results/<suite>.json`, and
