@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -41,8 +42,13 @@ func TestPrintUsageMentionsAllCommands(t *testing.T) {
 
 func TestRunRejectsRemovedCommands(t *testing.T) {
 	for _, cmd := range []string{"fetch", "groups", "suites", "clients"} {
-		if err := run([]string{cmd}); err == nil || !strings.Contains(err.Error(), "unknown command") {
-			t.Fatalf("run(%q) err = %v, want unknown command", cmd, err)
+		err := run([]string{cmd})
+		if err == nil {
+			t.Fatalf("run(%q) err = nil, want error", cmd)
+		}
+		want := fmt.Sprintf("missing key for %q, did you mean group=%s?", cmd, cmd)
+		if err.Error() != want {
+			t.Fatalf("run(%q) err = %v, want %q", cmd, err, want)
 		}
 	}
 }

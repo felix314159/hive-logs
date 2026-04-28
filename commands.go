@@ -438,6 +438,10 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 		return writePrettyJSON(os.Stdout, bundles)
 	}
 
+	divider := strings.Repeat("─", 80)
+	fmt.Println(divider)
+	printBundlesGroupedByFile(os.Stdout, bundles)
+	fmt.Printf("\n%s\n", divider)
 	fmt.Printf("%s / %s / %s\n", group, suite, clientName)
 	fmt.Printf("%s\nrun=%s\n", formatTime(run.Start), strings.TrimSuffix(run.FileName, ".json"))
 	if suiteResult.RunMetadata != nil {
@@ -449,15 +453,15 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 	if line := formatClientInfo(clientName, suiteClientBranch(suiteResult), clientCommit, clientVersion); line != "" {
 		fmt.Println(line)
 	}
+	fmt.Printf("url=%s\n\n", bundles[0].WebsiteURL)
 	fileCount := countTestFiles(bundles)
-	fmt.Printf("url=%s\n%s%s%s\n\n",
-		bundles[0].WebsiteURL, ansiRed, formatVectorFileCount(len(bundles), fileCount), ansiReset)
-	printBundlesGroupedByFile(os.Stdout, bundles)
+	fmt.Printf("%s%s%s\n",
+		ansiRed, formatVectorFileCount(len(bundles), fileCount), ansiReset)
 	return nil
 }
 
-// formatVectorFileCount renders the red header line summarising how many
-// failing test vectors live in how many distinct test files.
+// formatVectorFileCount renders the red summary line stating how many failing
+// test vectors live in how many distinct test files.
 func formatVectorFileCount(vectorCount, fileCount int) string {
 	vectorWord := "test vectors"
 	if vectorCount == 1 {
@@ -518,7 +522,10 @@ func printBundlesGroupedByFile(w io.Writer, bundles []BundleSummary) {
 			fmt.Fprintln(w, g.file)
 			bulletIndent = "  "
 		}
-		for _, b := range g.bundles {
+		for i, b := range g.bundles {
+			if i > 0 {
+				fmt.Fprintln(w)
+			}
 			label := b.TestVector
 			if label == "" {
 				label = b.TestName

@@ -39,8 +39,7 @@ func run(args []string) error {
 	case "list":
 		return cmdList(args)
 	default:
-		printUsage(os.Stderr)
-		return fmt.Errorf("unknown command %q", cmd)
+		return fmt.Errorf("missing key for %q, did you mean group=%s?", cmd, cmd)
 	}
 }
 

@@ -305,7 +305,7 @@ func TestQueryUnknownGroupListsAvailable(t *testing.T) {
 }
 
 func TestRunsCommandRemoved(t *testing.T) {
-	if err := run([]string{"runs"}); err == nil || !strings.Contains(err.Error(), "unknown command") {
+	if err := run([]string{"runs"}); err == nil || !strings.Contains(err.Error(), "missing key for \"runs\"") {
 		t.Fatalf("runs command should be removed, got err=%v", err)
 	}
 }
