@@ -381,6 +381,9 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 }
 
 func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite, clientName string, jsonOut bool) error {
+	if !isKnownClientName(clientName) {
+		return fmt.Errorf("client %q does not exist, the following clients exist: %s", clientName, strings.Join(hiveKnownClients, ", "))
+	}
 	runs, err := fetchListing(ctx, client, group)
 	if err != nil {
 		return err

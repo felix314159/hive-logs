@@ -64,6 +64,7 @@ func TestSplitTestName(t *testing.T) {
 		{"tests/foo.py::test_bar[x]-geth", "tests/foo.py", "test_bar[x]-geth"},
 		{"plain test name", "", "plain test name"},
 		{"::leading", "", "leading"},
+		{"Blob Transaction Ordering, Multiple Accounts (Cancun) (geth_default)", "Blob Transaction Ordering", "Multiple Accounts (Cancun) (geth_default)"},
 	}
 	for _, tc := range cases {
 		gotFile, gotVector := splitTestName(tc.name)

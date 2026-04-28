@@ -1,5 +1,7 @@
 # hive-logs
 
+![Example Screenshot](example.png)
+
 `hive-logs` is a direct CLI for the public EthPandaOps Hive result site.
 It exists to make two workflows easy:
 

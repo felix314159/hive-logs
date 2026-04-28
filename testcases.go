@@ -64,12 +64,21 @@ func sortMatches(matches []TestMatch) {
 	})
 }
 
-// splitTestName splits a pytest-style test name into the test file path and
-// the test vector portion. For names that contain "::" (e.g.
-// "tests/foo.py::test_bar[x]-client") the prefix is the file and the suffix
-// is the vector. Names without "::" return ("", name).
+// splitTestName splits a Hive test name into the test file (or category) and
+// the test vector portion. Two conventions are recognised:
+//
+//   - pytest-style names use "::" (e.g. "tests/foo.py::test_bar[x]-client");
+//     the prefix is the file and the suffix is the vector.
+//   - Hive Go-simulator names use ", " to separate a category from a variant
+//     (e.g. "Blob Transaction Ordering, Multiple Accounts (Cancun) (geth)");
+//     the prefix is treated as the category/file.
+//
+// Names matching neither return ("", name).
 func splitTestName(name string) (file, vector string) {
 	if i := strings.Index(name, "::"); i >= 0 {
+		return name[:i], name[i+2:]
+	}
+	if i := strings.Index(name, ", "); i >= 0 {
 		return name[:i], name[i+2:]
 	}
 	return "", name
