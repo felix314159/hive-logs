@@ -42,7 +42,7 @@ func cmdQuery(args []string) error {
 		return fetchSuiteClientFailures(ctx, client, qf.common.group, qf.common.suite, qf.common.client, qf.json)
 	}
 	if qf.common.suite != "" {
-		return listSuiteClients(ctx, client, qf.common.group, qf.common.suite, qf.json)
+		return listSuiteClients(ctx, client, qf.common.group, qf.common.suite, qf.json, qf.withDuration)
 	}
 	return listGroupRuns(ctx, client, qf.common.group, qf)
 }
@@ -283,7 +283,7 @@ type fixturesInfo struct {
 	URL     string `json:"url,omitempty"`
 }
 
-func listSuiteClients(ctx context.Context, client *Client, group, suite string, jsonOut bool) error {
+func listSuiteClients(ctx context.Context, client *Client, group, suite string, jsonOut, withDuration bool) error {
 	runs, err := fetchListing(ctx, client, group)
 	if err != nil {
 		return err
@@ -324,40 +324,7 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Client < out[j].Client })
 
-	var (
-		wg          sync.WaitGroup
-		metaMu      sync.Mutex
-		fixtures    fixturesInfo
-		hiveVersion *HiveVersion
-	)
-	for i := range out {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			suiteData, err := fetchSuite(ctx, client, group, out[i].RunFile)
-			if err != nil {
-				return
-			}
-			out[i].Duration = suiteDuration(suiteData)
-			out[i].Version, out[i].Commit = suiteClientVersionInfo(suiteData, out[i].Client)
-			out[i].Branch = suiteClientBranch(suiteData)
-
-			fx := suiteFixtures(suiteData)
-			var hv *HiveVersion
-			if suiteData.RunMetadata != nil {
-				hv = suiteData.RunMetadata.HiveVersion
-			}
-			metaMu.Lock()
-			if fixtures.Release == "" && fixtures.Branch == "" && (fx.Release != "" || fx.Branch != "") {
-				fixtures = fx
-			}
-			if hiveVersion == nil && hv != nil {
-				hiveVersion = hv
-			}
-			metaMu.Unlock()
-		}(i)
-	}
-	wg.Wait()
+	fixtures, hiveVersion := hydrateSuiteSummaries(ctx, client, group, out, !jsonOut, withDuration)
 
 	if jsonOut {
 		return writePrettyJSON(os.Stdout, struct {
@@ -383,18 +350,31 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 	}
 	fmt.Println()
 
-	w := newTextTable(os.Stdout, []string{"CLIENT", "PASS", "FAIL", "START", "DURATION", "BRANCH", "COMMIT", "VERSION"}, []bool{false, true, true, false, false, false, false, false})
+	headers := []string{"CLIENT", "PASS", "FAIL", "START"}
+	right := []bool{false, true, true, false}
+	if withDuration {
+		headers = append(headers, "DURATION")
+		right = append(right, false)
+	}
+	headers = append(headers, "BRANCH", "COMMIT", "VERSION")
+	right = append(right, false, false, false)
+	w := newTextTable(os.Stdout, headers, right)
 	for _, e := range out {
-		w.addRow(
+		row := []tableCell{
 			textCell(e.Client),
 			passCell(e.Passes),
 			failCell(e.Fails),
 			textCell(formatTime(e.RunStart)),
-			textCell(formatHMS(e.Duration)),
+		}
+		if withDuration {
+			row = append(row, textCell(formatHMS(e.Duration)))
+		}
+		row = append(row,
 			textCell(e.Branch),
 			textCell(e.Commit),
 			textCell(truncate(e.Version, 80)),
 		)
+		w.addRow(row...)
 	}
 	w.flush()
 	return nil
@@ -605,6 +585,108 @@ func fetchBundlesParallel(ctx context.Context, client *Client, ff fetchFlags, ru
 		return nil, firstErr
 	}
 	return bundles, nil
+}
+
+// fetchSuiteConcurrency caps in-flight suite-JSON fetches. Each fetch is
+// already streamed (network and JSON parse overlap), so this is mostly a
+// guard against opening too many connections at once.
+const fetchSuiteConcurrency = 8
+
+// hydrateSuiteSummaries fills per-client duration, version, and branch by
+// fetching each unique RunFile exactly once. Duration/Version/Branch are
+// derived from the suite JSON; Fixtures and HiveVersion are global so we
+// return the first non-empty value seen.
+//
+// When withDuration is false, only the suite header (everything before the
+// huge testCases field) is fetched — typically a >20x speedup, but the
+// returned summaries have Duration=0. When withDuration is true the full
+// suite JSON is downloaded and Duration is populated.
+//
+// When showProgress is true, a `\r[i/N] P%` indicator is written to stderr as
+// fetches complete, mirroring fetchBundlesParallel's UX.
+func hydrateSuiteSummaries(ctx context.Context, client *Client, group string, out []SuiteClientSummary, showProgress, withDuration bool) (fixturesInfo, *HiveVersion) {
+	runFiles := make(map[string][]int)
+	var order []string
+	for i, e := range out {
+		if _, ok := runFiles[e.RunFile]; !ok {
+			order = append(order, e.RunFile)
+		}
+		runFiles[e.RunFile] = append(runFiles[e.RunFile], i)
+	}
+	if len(order) == 0 {
+		return fixturesInfo{}, nil
+	}
+
+	if showProgress {
+		fileWord := "files"
+		if len(order) == 1 {
+			fileWord = "file"
+		}
+		fmt.Fprintf(os.Stderr, "fetching suite metadata for %d run %s...\n", len(order), fileWord)
+	}
+
+	var (
+		wg          sync.WaitGroup
+		sem         = make(chan struct{}, fetchSuiteConcurrency)
+		metaMu      sync.Mutex
+		fixtures    fixturesInfo
+		hiveVersion *HiveVersion
+		progressMu  sync.Mutex
+		done        int
+	)
+	for _, runFile := range order {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(runFile string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			var (
+				suiteData *SuiteResult
+				err       error
+			)
+			if withDuration {
+				suiteData, err = fetchSuite(ctx, client, group, runFile)
+			} else {
+				suiteData, err = fetchSuiteHeader(ctx, client, group, runFile)
+			}
+			if err == nil {
+				branch := suiteClientBranch(suiteData)
+				var duration time.Duration
+				if withDuration {
+					duration = suiteDuration(suiteData)
+				}
+				for _, idx := range runFiles[runFile] {
+					out[idx].Duration = duration
+					out[idx].Branch = branch
+					out[idx].Version, out[idx].Commit = suiteClientVersionInfo(suiteData, out[idx].Client)
+				}
+				fx := suiteFixtures(suiteData)
+				var hv *HiveVersion
+				if suiteData.RunMetadata != nil {
+					hv = suiteData.RunMetadata.HiveVersion
+				}
+				metaMu.Lock()
+				if fixtures.Release == "" && fixtures.Branch == "" && (fx.Release != "" || fx.Branch != "") {
+					fixtures = fx
+				}
+				if hiveVersion == nil && hv != nil {
+					hiveVersion = hv
+				}
+				metaMu.Unlock()
+			}
+			if showProgress {
+				progressMu.Lock()
+				done++
+				fmt.Fprintf(os.Stderr, "\r[%d/%d] %d%%", done, len(order), done*100/len(order))
+				progressMu.Unlock()
+			}
+		}(runFile)
+	}
+	wg.Wait()
+	if showProgress {
+		fmt.Fprintln(os.Stderr)
+	}
+	return fixtures, hiveVersion
 }
 
 func suiteDuration(suite *SuiteResult) time.Duration {

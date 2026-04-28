@@ -48,13 +48,18 @@ func fetchListing(ctx context.Context, client *Client, group string) ([]ListingR
 }
 
 func fetchSuite(ctx context.Context, client *Client, group, fileName string) (*SuiteResult, error) {
-	data, err := client.get(ctx, pathJoin(group, hiveResultsDir, fileName))
-	if err != nil {
-		return nil, err
-	}
 	var suite SuiteResult
-	if err := json.Unmarshal(data, &suite); err != nil {
+	if err := client.getJSONStream(ctx, pathJoin(group, hiveResultsDir, fileName), &suite); err != nil {
 		return nil, err
 	}
 	return &suite, nil
+}
+
+// fetchSuiteHeader streams the suite JSON and stops as soon as it reaches the
+// testCases field. In Hive's serialization testCases is the last (and by far
+// the largest) field, so this lets us skip downloading and decompressing
+// hundreds of MB when the caller only needs run-level metadata. The returned
+// SuiteResult has TestCases left empty.
+func fetchSuiteHeader(ctx context.Context, client *Client, group, fileName string) (*SuiteResult, error) {
+	return client.getSuiteHeader(ctx, pathJoin(group, hiveResultsDir, fileName))
 }

@@ -72,8 +72,10 @@ Usage:
   group=GROUP [--all] [--files] [--limit N] [--json]
       Print the latest matching Hive runs grouped by suite, then client.
       --all includes older runs; --files prints run file names.
-  group=GROUP suite=SUITE [--json]
-      Per-client pass/fail counts, run start, and duration for the latest SUITE run in GROUP.
+  group=GROUP suite=SUITE [--json] [--duration]
+      Per-client pass/fail counts, run start, branch, commit, and version for
+      the latest SUITE run in GROUP. Add --duration to also fetch run wall-time
+      (slower; downloads the full suite JSON).
   group=GROUP suite=SUITE client=CLIENT [--json]
       List CLIENT's failing tests in the latest SUITE run and download
       hive.log + <CLIENT>.log bundles for each into ./logs.

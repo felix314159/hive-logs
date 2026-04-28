@@ -15,12 +15,13 @@ type commonFlags struct {
 }
 
 type queryFlags struct {
-	common    commonFlags
-	baseURL   string
-	all       bool
-	showFiles bool
-	limit     int
-	json      bool
+	common      commonFlags
+	baseURL     string
+	all         bool
+	showFiles   bool
+	limit       int
+	json        bool
+	withDuration bool
 }
 
 // parseQueryArgs parses the key=value query syntax (group=, suite=, client=)
@@ -94,6 +95,12 @@ func parseQueryArgs(args []string) (queryFlags, error) {
 				return qf, err
 			}
 			qf.json = v
+		case "duration":
+			v, err := parseBoolFlag(name, value, hasValue)
+			if err != nil {
+				return qf, err
+			}
+			qf.withDuration = v
 		default:
 			return qf, fmt.Errorf("unknown flag --%s", name)
 		}

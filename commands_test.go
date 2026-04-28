@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -84,6 +85,85 @@ func TestCmdListJSONCombinesGroupsSuitesAndClients(t *testing.T) {
 	}
 }
 
+func TestHydrateSuiteSummariesFetchesEachRunFileOnce(t *testing.T) {
+	suite := commandSuiteFixture()
+	suite.ClientVersions = map[string]string{
+		"go-ethereum_main": "Geth/v1.15.0/linux abcdef123456",
+		"reth_main":        "Reth Version: 0.2.0 ffeeddc",
+	}
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/generic/results/run.json":
+			atomic.AddInt32(&requests, 1)
+			if err := json.NewEncoder(w).Encode(suite); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	out := []SuiteClientSummary{
+		{Client: "go-ethereum", RunFile: "run.json"},
+		{Client: "reth", RunFile: "run.json"},
+	}
+	hydrateSuiteSummaries(nilContext(), newClient(server.URL), "generic", out, false, true)
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("run.json requests = %d, want 1 (clients sharing a run file should dedup)", got)
+	}
+	if out[0].Version == "" || out[1].Version == "" {
+		t.Fatalf("clients missing per-client version after hydrate: %+v", out)
+	}
+}
+
+func TestHydrateSuiteSummariesSkipsTestCasesWhenNoDurationRequested(t *testing.T) {
+	suite := commandSuiteFixture()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/generic/results/run.json" {
+			http.NotFound(w, r)
+			return
+		}
+		// Encode just the header fields (mirroring Hive's order: testCases is last).
+		// The handler closes the connection partway through testCases to prove
+		// hydrate doesn't need it.
+		header := map[string]any{
+			"id":             suite.ID,
+			"name":           suite.Name,
+			"clientVersions": suite.ClientVersions,
+			"runMetadata":    suite.RunMetadata,
+		}
+		buf, err := json.Marshal(header)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Strip trailing `}` and append a testCases prefix so the stream is
+		// well-formed up to (but not past) the testCases value.
+		body := append(buf[:len(buf)-1], []byte(`,"testCases":{`)...)
+		w.Write(body)
+		// Do not close the JSON object — header fetch should bail before this matters.
+	}))
+	defer server.Close()
+
+	out := []SuiteClientSummary{
+		{Client: "go-ethereum", RunFile: "run.json"},
+	}
+	fixtures, hv := hydrateSuiteSummaries(nilContext(), newClient(server.URL), "generic", out, false, false)
+	if out[0].Version == "" || out[0].Branch == "" {
+		t.Fatalf("expected version and branch from header fetch, got %+v", out[0])
+	}
+	if out[0].Duration != 0 {
+		t.Fatalf("duration should be zero when --duration is off, got %s", out[0].Duration)
+	}
+	if hv == nil || hv.Commit == "" {
+		t.Fatalf("expected hive version from header, got %+v", hv)
+	}
+	if fixtures.Release == "" {
+		t.Fatalf("expected fixtures from header, got %+v", fixtures)
+	}
+}
+
 func TestListSuiteClientsAddsDurationAndVersionMetadata(t *testing.T) {
 	run := ListingRun{
 		Name:     "suite-a",
@@ -99,7 +179,7 @@ func TestListSuiteClientsAddsDurationAndVersionMetadata(t *testing.T) {
 	defer server.Close()
 
 	output, err := captureStdout(func() error {
-		return listSuiteClients(nilContext(), newClient(server.URL), "generic", "suite-a", true)
+		return listSuiteClients(nilContext(), newClient(server.URL), "generic", "suite-a", true, true)
 	})
 	if err != nil {
 		t.Fatal(err)
