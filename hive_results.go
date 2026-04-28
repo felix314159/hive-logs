@@ -58,24 +58,3 @@ func fetchSuite(ctx context.Context, client *Client, group, fileName string) (*S
 	}
 	return &suite, nil
 }
-
-func selectRun(ctx context.Context, client *Client, cf commonFlags) (ListingRun, error) {
-	if cf.runFile != "" {
-		return ListingRun{
-			Name:     cf.suite,
-			FileName: cf.runFile,
-			Clients:  []string{cf.client},
-		}, nil
-	}
-
-	runs, err := fetchListing(ctx, client, cf.group)
-	if err != nil {
-		return ListingRun{}, err
-	}
-	matches := filterRuns(runs, cf.suite, cf.client, "latest")
-	if len(matches) == 0 {
-		return ListingRun{}, fmt.Errorf("no run found for group=%s suite=%s client=%s", cf.group, cf.suite, cf.client)
-	}
-	sortRunsNewestFirst(matches)
-	return matches[0], nil
-}

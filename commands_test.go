@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +63,78 @@ func TestCmdSuitesJSONListsLatestSuitePerGroup(t *testing.T) {
 	}
 }
 
+func TestCmdListCombinesGroupsSuitesAndClients(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/discovery.json":
+			fmt.Fprint(w, `[{"name":"generic"},{"name":"bal"}]`)
+		case "/generic/listing.jsonl":
+			writeListingRuns(t, w, []ListingRun{
+				{Name: "suite-b", Start: time.Date(2026, 4, 27, 10, 0, 0, 0, time.UTC)},
+				{Name: "suite-a", Start: time.Date(2026, 4, 28, 10, 0, 0, 0, time.UTC)},
+			})
+		case "/bal/listing.jsonl":
+			writeListingRuns(t, w, []ListingRun{
+				{Name: "suite-c", Start: time.Date(2026, 4, 26, 10, 0, 0, 0, time.UTC)},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	output, err := captureStdout(func() error {
+		return cmdList([]string{"--base-url", server.URL})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"GROUPS",
+		"generic",
+		"SUITES",
+		"suite-a",
+		"CLIENTS",
+		"besu",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("list output does not contain %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestCmdListJSONCombinesGroupsSuitesAndClients(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/discovery.json":
+			fmt.Fprint(w, `[{"name":"generic"}]`)
+		case "/generic/listing.jsonl":
+			writeListingRuns(t, w, []ListingRun{
+				{Name: "suite-a", Start: time.Date(2026, 4, 28, 10, 0, 0, 0, time.UTC)},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	output, err := captureStdout(func() error {
+		return cmdList([]string{"--base-url", server.URL, "--json"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary ListSummary
+	if err := json.Unmarshal([]byte(output), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Groups) != 1 || summary.Groups[0].Name != "generic" ||
+		len(summary.Suites) != 1 || summary.Suites[0].Suite != "suite-a" ||
+		len(summary.Clients) == 0 || summary.Clients[0] != "besu" {
+		t.Fatalf("summary = %+v", summary)
+	}
+}
+
 func TestListSuiteClientsAddsDurationAndVersionMetadata(t *testing.T) {
 	run := ListingRun{
 		Name:     "suite-a",
@@ -98,74 +169,6 @@ func TestListSuiteClientsAddsDurationAndVersionMetadata(t *testing.T) {
 	if len(decoded.Clients) != 1 || decoded.Clients[0].Duration != 5*time.Second ||
 		decoded.Clients[0].Version != "1.15.0" || decoded.Clients[0].Commit != "abcdef1" {
 		t.Fatalf("clients = %+v", decoded.Clients)
-	}
-}
-
-func TestCmdListJSONListsMatchingRows(t *testing.T) {
-	run := ListingRun{
-		Name:     "suite-a",
-		Clients:  []string{"go-ethereum_main"},
-		Start:    time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC),
-		FileName: "run.json",
-	}
-	server := commandServer(t, run, commandSuiteFixture())
-	defer server.Close()
-
-	output, err := captureStdout(func() error {
-		return cmdList([]string{
-			"--base-url", server.URL,
-			"--suite", "suite-a",
-			"--client", "geth",
-			"--test", "engine",
-			"--status", "all",
-			"--json",
-		})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rows []ListRow
-	if err := json.Unmarshal([]byte(output), &rows); err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 || rows[0].Status != "FAIL" || !rows[0].HasHiveLog || rows[0].ClientLogCount != 1 {
-		t.Fatalf("rows = %+v", rows)
-	}
-}
-
-func TestCmdFetchJSONWritesBundle(t *testing.T) {
-	run := ListingRun{
-		Name:     "suite-a",
-		Clients:  []string{"go-ethereum_main"},
-		Start:    time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC),
-		FileName: "run.json",
-	}
-	server := commandServer(t, run, commandSuiteFixture())
-	defer server.Close()
-
-	outDir := t.TempDir()
-	output, err := captureStdout(func() error {
-		return cmdFetch([]string{
-			"--base-url", server.URL,
-			"--suite", "suite-a",
-			"--client", "geth",
-			"--test", "engine",
-			"--out", outDir,
-			"--json",
-		})
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var bundles []BundleSummary
-	if err := json.Unmarshal([]byte(output), &bundles); err != nil {
-		t.Fatal(err)
-	}
-	if len(bundles) != 1 || !strings.HasPrefix(bundles[0].Directory, filepath.Clean(outDir)) {
-		t.Fatalf("bundles = %+v", bundles)
-	}
-	if !strings.HasSuffix(bundles[0].ClientLogPath, "go-ethereum.log") {
-		t.Fatalf("client log path = %q", bundles[0].ClientLogPath)
 	}
 }
 

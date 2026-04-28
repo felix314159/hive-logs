@@ -25,10 +25,10 @@ Print version:
 go run . --version
 ```
 
-List groups:
+List groups, suites, and known clients:
 
 ```sh
-go run . groups
+go run . list
 ```
 
 Show the latest run for each suite/client in a group:
@@ -37,15 +37,8 @@ Show the latest run for each suite/client in a group:
 go run . groups generic
 ```
 
-Filter the group view by client:
-
-```sh
-go run . groups generic --client go-ethereum
-```
-
 Add `--all` when you want to include older runs, then add `--files` to print
-file names for `--run-file` on `list` or `fetch`. Add `--limit N` when you want
-to cap the number of rows printed.
+file names. Add `--limit N` when you want to cap the number of rows printed.
 
 Show per-client pass/fail counts for the latest run of a simulator:
 
@@ -53,24 +46,11 @@ Show per-client pass/fail counts for the latest run of a simulator:
 go run . groups generic engine-api
 ```
 
-List failing tests in the latest matching run. `--test` is a case-insensitive
-substring by default, so full pytest ids can be pasted without escaping regex
-characters. Add `--regex` when you want regex matching.
+List failing tests for a client in the latest matching run and fetch all failure
+bundles into `./logs`:
 
 ```sh
-go run . list --group generic --suite eels/consume-engine --client go-ethereum --test 7702
-```
-
-Fetch the first matching failure bundle:
-
-```sh
-go run . fetch --group generic --suite eels/consume-engine --client go-ethereum --test 'some_test_name' --out logs
-```
-
-Fetch all matching failures:
-
-```sh
-go run . fetch --group generic --suite eels/consume-engine --client go-ethereum --test 7702 --limit 0
+go run . groups generic eels/consume-engine go-ethereum
 ```
 
 Each bundle contains:
@@ -83,8 +63,8 @@ Each bundle contains:
 ---
 
 Imagine client `go-ethereum` fails the simulator `consume-engine` for test
-`tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_tx[fork_Cancun-tx_type_0-blockchain_test_engine_from_state_test-non-empty-balance-correct-initcode]`, so now to fetch the relevant logs (hive + client logs) run:
+`tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_tx[fork_Cancun-tx_type_0-blockchain_test_engine_from_state_test-non-empty-balance-correct-initcode]`, so now to fetch the latest failing logs for the suite and client run:
 
 ```go
-go run . fetch --group generic --suite eels/consume-engine --client go-ethereum --test 'tests/paris/eip7610_create_collision/test_initcollision.py::test_init_collision_create_tx[fork_Cancun-tx_type_0-blockchain_test_engine_from_state_test-non-empty-balance-correct-initcode]'
+go run . groups generic eels/consume-engine go-ethereum
 ```

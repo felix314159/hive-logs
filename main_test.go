@@ -130,7 +130,7 @@ func TestGroupsOutputSortedBySuiteThenClient(t *testing.T) {
 	assertLineBefore(t, output, []string{"graphql", "go-ethereum"}, []string{"rpc-compat", "reth"})
 }
 
-func TestGroupsClientFlagFiltersAfterGroupName(t *testing.T) {
+func TestGroupsClientFlagRemoved(t *testing.T) {
 	server := listingServer(t, []ListingRun{
 		{
 			Name:     "suite-a",
@@ -151,14 +151,42 @@ func TestGroupsClientFlagFiltersAfterGroupName(t *testing.T) {
 	})
 	defer server.Close()
 
-	output, err := captureStdout(func() error {
+	_, err := captureStdout(func() error {
 		return cmdGroups([]string{"generic", "--base-url", server.URL, "--client", "go-ethereum"})
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "unknown groups flag --client") {
+		t.Fatalf("groups --client err = %v, want unknown flag", err)
 	}
-	if !strings.Contains(output, "suite-a") || strings.Contains(output, "suite-b") {
-		t.Fatalf("groups --client did not filter output:\n%s", output)
+}
+
+func TestGroupsSuitePositionReportsKnownClientName(t *testing.T) {
+	server := listingServer(t, []ListingRun{
+		{
+			Name:     "engine-api",
+			Passes:   1,
+			Fails:    0,
+			Clients:  []string{"besu"},
+			Start:    time.Date(2026, 4, 27, 8, 18, 24, 0, time.UTC),
+			FileName: "engine-api-besu.json",
+		},
+	})
+	defer server.Close()
+
+	_, err := captureStdout(func() error {
+		return cmdGroups([]string{"--base-url", server.URL, "generic", "besu"})
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, want := range []string{
+		`expected a suite name after group "generic"`,
+		`"besu" is a client name`,
+		`groups generic SUITE besu`,
+		`groups generic`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error does not contain %q:\n%s", want, err)
+		}
 	}
 }
 

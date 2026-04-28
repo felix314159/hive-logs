@@ -17,6 +17,17 @@ func TestNormalizeClientHandlesAliasesSuffixesAndFallback(t *testing.T) {
 	}
 }
 
+func TestIsKnownClientNameHandlesCanonicalAliasesAndSuffixes(t *testing.T) {
+	for _, name := range []string{"besu", "geth", "go-ethereum_main"} {
+		if !isKnownClientName(name) {
+			t.Fatalf("isKnownClientName(%q) = false, want true", name)
+		}
+	}
+	if isKnownClientName("engine-api") {
+		t.Fatal("isKnownClientName(\"engine-api\") = true, want false")
+	}
+}
+
 func TestCleanClientVersionAndCommitExtraction(t *testing.T) {
 	tests := []struct {
 		client string

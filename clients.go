@@ -132,6 +132,16 @@ func normalizeClient(key string) string {
 	return key
 }
 
+func isKnownClientName(name string) bool {
+	canonical := normalizeClient(name)
+	for _, known := range hiveKnownClients {
+		if canonical == known {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizedClients(clients []string) []string {
 	out := make([]string, 0, len(clients))
 	for _, client := range clients {

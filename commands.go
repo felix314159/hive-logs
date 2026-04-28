@@ -3,9 +3,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"sort"
@@ -37,49 +37,28 @@ func cmdGroups(args []string) error {
 		return listGroupRuns(ctx, client, rest[0], gf)
 	}
 
-	groups, err := fetchGroups(ctx, client)
+	summaries, err := fetchGroupSummaries(ctx, client, gf.baseURL)
 	if err != nil {
 		return err
 	}
-
-	base := strings.TrimRight(gf.baseURL, "/")
-	summaries := make([]GroupSummary, len(groups))
-	var wg sync.WaitGroup
-	for i, g := range groups {
-		summaries[i] = GroupSummary{
-			Name: g.Name,
-			URL:  fmt.Sprintf(hiveGroupURLFormat, base, url.PathEscape(g.Name)),
-		}
-		wg.Add(1)
-		go func(i int, name string) {
-			defer wg.Done()
-			runs, err := fetchListing(ctx, client, name)
-			if err != nil {
-				return
-			}
-			for _, r := range runs {
-				if r.Start.After(summaries[i].Latest) {
-					summaries[i].Latest = r.Start
-				}
-			}
-		}(i, g.Name)
-	}
-	wg.Wait()
-
 	if gf.json {
 		return writePrettyJSON(os.Stdout, summaries)
 	}
+	writeGroupSummaries(os.Stdout, summaries)
+	return nil
+}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "GROUP\tURL\tLATEST")
+func writeGroupSummaries(w io.Writer, summaries []GroupSummary) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "GROUP\tURL\tLATEST")
 	for _, s := range summaries {
 		latest := ""
 		if !s.Latest.IsZero() {
 			latest = formatTime(s.Latest)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", s.Name, s.URL, latest)
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", s.Name, s.URL, latest)
 	}
-	return w.Flush()
+	tw.Flush()
 }
 
 type GroupSummary struct {
@@ -109,9 +88,139 @@ func cmdSuites(args []string) error {
 
 	ctx := context.Background()
 	client := newClient(baseURL)
-	groups, err := fetchGroups(ctx, client)
+	entries, err := fetchSuiteSummaries(ctx, client)
 	if err != nil {
 		return err
+	}
+
+	if jsonOut {
+		return writePrettyJSON(os.Stdout, entries)
+	}
+	writeSuiteSummaries(os.Stdout, entries)
+	return nil
+}
+
+func writeSuiteSummaries(w io.Writer, entries []SuiteSummary) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "SUITE\tGROUP\tLATEST")
+	for _, e := range entries {
+		latest := ""
+		if !e.Latest.IsZero() {
+			latest = formatTime(e.Latest)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", e.Suite, e.Group, latest)
+	}
+	tw.Flush()
+}
+
+func cmdClients(args []string) error {
+	var jsonOut bool
+	fs := flag.NewFlagSet("clients", flag.ExitOnError)
+	fs.BoolVar(&jsonOut, "json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected arguments for clients: %s", strings.Join(fs.Args(), " "))
+	}
+
+	if jsonOut {
+		return writePrettyJSON(os.Stdout, hiveKnownClients)
+	}
+	for _, c := range hiveKnownClients {
+		fmt.Println(c)
+	}
+	return nil
+}
+
+type ListSummary struct {
+	Groups  []GroupSummary `json:"groups"`
+	Suites  []SuiteSummary `json:"suites"`
+	Clients []string       `json:"clients"`
+}
+
+func cmdList(args []string) error {
+	var baseURL string
+	var jsonOut bool
+	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	fs.StringVar(&baseURL, "base-url", defaultBaseURL, "Hive results origin")
+	fs.BoolVar(&jsonOut, "json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected arguments for list: %s", strings.Join(fs.Args(), " "))
+	}
+
+	ctx := context.Background()
+	client := newClient(baseURL)
+	groups, err := fetchGroupSummaries(ctx, client, baseURL)
+	if err != nil {
+		return err
+	}
+	suites, err := fetchSuiteSummaries(ctx, client)
+	if err != nil {
+		return err
+	}
+	summary := ListSummary{
+		Groups:  groups,
+		Suites:  suites,
+		Clients: hiveKnownClients,
+	}
+
+	if jsonOut {
+		return writePrettyJSON(os.Stdout, summary)
+	}
+
+	fmt.Println("GROUPS")
+	writeGroupSummaries(os.Stdout, summary.Groups)
+	fmt.Println()
+	fmt.Println("SUITES")
+	writeSuiteSummaries(os.Stdout, summary.Suites)
+	fmt.Println()
+	fmt.Println("CLIENTS")
+	for _, c := range summary.Clients {
+		fmt.Println(c)
+	}
+	return nil
+}
+
+func fetchGroupSummaries(ctx context.Context, client *Client, baseURL string) ([]GroupSummary, error) {
+	groups, err := fetchGroups(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+
+	base := strings.TrimRight(baseURL, "/")
+	summaries := make([]GroupSummary, len(groups))
+	var wg sync.WaitGroup
+	for i, g := range groups {
+		summaries[i] = GroupSummary{
+			Name: g.Name,
+			URL:  fmt.Sprintf(hiveGroupURLFormat, base, url.PathEscape(g.Name)),
+		}
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			runs, err := fetchListing(ctx, client, name)
+			if err != nil {
+				return
+			}
+			for _, r := range runs {
+				if r.Start.After(summaries[i].Latest) {
+					summaries[i].Latest = r.Start
+				}
+			}
+		}(i, g.Name)
+	}
+	wg.Wait()
+	return summaries, nil
+}
+
+func fetchSuiteSummaries(ctx context.Context, client *Client) ([]SuiteSummary, error) {
+	groups, err := fetchGroups(ctx, client)
+	if err != nil {
+		return nil, err
 	}
 
 	var (
@@ -148,41 +257,7 @@ func cmdSuites(args []string) error {
 		}
 		return entries[i].Suite < entries[j].Suite
 	})
-
-	if jsonOut {
-		return writePrettyJSON(os.Stdout, entries)
-	}
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SUITE\tGROUP\tLATEST")
-	for _, e := range entries {
-		latest := ""
-		if !e.Latest.IsZero() {
-			latest = formatTime(e.Latest)
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", e.Suite, e.Group, latest)
-	}
-	return w.Flush()
-}
-
-func cmdClients(args []string) error {
-	var jsonOut bool
-	fs := flag.NewFlagSet("clients", flag.ExitOnError)
-	fs.BoolVar(&jsonOut, "json", false, "emit JSON")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("unexpected arguments for clients: %s", strings.Join(fs.Args(), " "))
-	}
-
-	if jsonOut {
-		return writePrettyJSON(os.Stdout, hiveKnownClients)
-	}
-	for _, c := range hiveKnownClients {
-		fmt.Println(c)
-	}
-	return nil
+	return entries, nil
 }
 
 type SuiteClientSummary struct {
@@ -212,6 +287,16 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 	}
 	matches := filterRuns(runs, suite, "", "latest")
 	if len(matches) == 0 {
+		if isKnownClientName(suite) {
+			return fmt.Errorf(
+				"expected a suite name after group %q, but %q is a client name; client must be the third positional argument, as in `groups %s SUITE %s`; use `groups %s` to list suites and clients in this group",
+				group,
+				suite,
+				group,
+				suite,
+				group,
+			)
+		}
 		return fmt.Errorf("no runs found for group=%s suite=%s", group, suite)
 	}
 
@@ -345,14 +430,11 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 
 	ff := fetchFlags{
 		common: commonFlags{
-			baseURL: client.baseURL,
-			group:   group,
-			suite:   suite,
-			client:  clientName,
+			group:  group,
+			suite:  suite,
+			client: clientName,
 		},
 		outDir: "logs",
-		limit:  0,
-		status: "fail",
 	}
 
 	bundles := make([]BundleSummary, 0, len(tests))
@@ -428,7 +510,7 @@ func listGroupRuns(ctx context.Context, client *Client, group string, gf groupsF
 	if gf.all {
 		latestMode = ""
 	}
-	runs = filterRuns(runs, "", gf.client, latestMode)
+	runs = filterRuns(runs, "", "", latestMode)
 	sortRunsForDisplay(runs)
 	if gf.limit > 0 && len(runs) > gf.limit {
 		runs = runs[:gf.limit]
@@ -459,159 +541,4 @@ func listGroupRuns(ctx context.Context, client *Client, group string, gf groupsF
 	}
 	w.flush()
 	return nil
-}
-
-func cmdList(args []string) error {
-	var cf commonFlags
-	fs := flag.NewFlagSet("list", flag.ExitOnError)
-	addCommonFlags(fs, &cf)
-	limit := fs.Int("limit", 100, "maximum rows to print")
-	status := fs.String("status", "fail", "fail, pass, or all")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if cf.suite == "" {
-		return errors.New("--suite is required")
-	}
-	if cf.client == "" {
-		return errors.New("--client is required")
-	}
-
-	ctx := context.Background()
-	client := newClient(cf.baseURL)
-	run, err := selectRun(ctx, client, cf)
-	if err != nil {
-		return err
-	}
-	suite, err := fetchSuite(ctx, client, cf.group, run.FileName)
-	if err != nil {
-		return err
-	}
-	matches, err := matchingTests(suite, cf.test, cf.regex, *status)
-	if err != nil {
-		return err
-	}
-	sortMatches(matches)
-	if *limit > 0 && len(matches) > *limit {
-		matches = matches[:*limit]
-	}
-
-	rows := make([]ListRow, 0, len(matches))
-	for _, match := range matches {
-		rows = append(rows, listRow(cf.group, run, suite, match))
-	}
-	if cf.json {
-		return writePrettyJSON(os.Stdout, rows)
-	}
-
-	fmt.Printf("%s / %s / %s latest run: %s (%s)\n\n", cf.group, cf.suite, cf.client, formatTime(run.Start), run.FileName)
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tSTATUS\tTEST\tHIVE_LOG\tCLIENT_LOGS")
-	for _, row := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\n", row.TestID, row.Status, row.Name, yesNo(row.HasHiveLog), row.ClientLogCount)
-	}
-	return w.Flush()
-}
-
-func cmdFetch(args []string) error {
-	var ff fetchFlags
-	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
-	addCommonFlags(fs, &ff.common)
-	fs.StringVar(&ff.outDir, "out", "logs", "output directory")
-	fs.IntVar(&ff.limit, "limit", 1, "maximum matching tests to fetch, 0 for all")
-	fs.BoolVar(&ff.fullClient, "full-client-log", false, "fetch full client log files")
-	fs.BoolVar(&ff.includePass, "include-pass", false, "allow matching passing tests")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if ff.common.suite == "" {
-		return errors.New("--suite is required")
-	}
-	if ff.common.client == "" {
-		return errors.New("--client is required")
-	}
-	if ff.common.test == "" {
-		return errors.New("--test is required")
-	}
-	ff.status = "fail"
-	if ff.includePass {
-		ff.status = "all"
-	}
-
-	ctx := context.Background()
-	client := newClient(ff.common.baseURL)
-	run, err := selectRun(ctx, client, ff.common)
-	if err != nil {
-		return err
-	}
-	suite, err := fetchSuite(ctx, client, ff.common.group, run.FileName)
-	if err != nil {
-		return err
-	}
-	matches, err := matchingTests(suite, ff.common.test, ff.common.regex, ff.status)
-	if err != nil {
-		return err
-	}
-	sortMatches(matches)
-	if len(matches) == 0 {
-		return errors.New("no matching tests")
-	}
-	if ff.limit > 0 && len(matches) > ff.limit {
-		matches = matches[:ff.limit]
-	}
-
-	var bundles []BundleSummary
-	for _, match := range matches {
-		bundle, err := fetchBundle(ctx, client, ff, run, suite, match)
-		if err != nil {
-			return err
-		}
-		bundles = append(bundles, bundle)
-	}
-
-	if ff.common.json {
-		return writePrettyJSON(os.Stdout, bundles)
-	}
-	if len(bundles) > 0 {
-		fmt.Printf("url: %s\n\n", bundles[0].WebsiteURL)
-	}
-	for _, b := range bundles {
-		fmt.Printf("wrote %s\n", b.Directory)
-		fmt.Printf("  hive log:              %s\n", b.HiveLogPath)
-		fmt.Printf("  client log:            %s\n", b.ClientLogPath)
-		fmt.Printf("  reproduce commands:    %s\n", b.ReproduceCommandsPath)
-	}
-	return nil
-}
-
-type ListRow struct {
-	Group          string    `json:"group"`
-	Suite          string    `json:"suite"`
-	Client         string    `json:"client"`
-	RunStart       time.Time `json:"run_start"`
-	RunFile        string    `json:"run_file"`
-	TestID         string    `json:"test_id"`
-	Name           string    `json:"name"`
-	Status         string    `json:"status"`
-	HasHiveLog     bool      `json:"has_hive_log"`
-	ClientLogCount int       `json:"client_log_count"`
-}
-
-func listRow(group string, run ListingRun, suite *SuiteResult, match TestMatch) ListRow {
-	status := "FAIL"
-	if match.Test.SummaryResult.Pass {
-		status = "PASS"
-	}
-	return ListRow{
-		Group:          group,
-		Suite:          suite.Name,
-		Client:         strings.Join(normalizedClients(run.Clients), ","),
-		RunStart:       run.Start,
-		RunFile:        run.FileName,
-		TestID:         match.TestID,
-		Name:           match.Test.Name,
-		Status:         status,
-		HasHiveLog:     suite.TestDetailsLog != "" && match.Test.SummaryResult.Log != nil,
-		ClientLogCount: len(match.Test.ClientInfo),
-	}
 }
