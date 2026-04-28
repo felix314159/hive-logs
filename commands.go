@@ -444,13 +444,14 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 		outDir: "logs",
 	}
 
-	bundles := make([]BundleSummary, 0, len(tests))
-	for _, match := range tests {
-		bundle, err := fetchBundle(ctx, client, ff, run, suiteResult, match)
-		if err != nil {
-			return err
-		}
-		bundles = append(bundles, bundle)
+	testWord := "tests"
+	if len(tests) == 1 {
+		testWord = "test"
+	}
+	fmt.Fprintf(os.Stderr, "fetching logs for %d failing %s...\n", len(tests), testWord)
+	bundles, err := fetchBundlesParallel(ctx, client, ff, run, suiteResult, tests)
+	if err != nil {
+		return err
 	}
 
 	if jsonOut {
@@ -481,6 +482,62 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 		fmt.Printf("    reproduce:   %s\n", b.ReproduceCommandsPath)
 	}
 	return nil
+}
+
+// fetchBundleConcurrency caps in-flight log downloads. Each bundle fetch
+// issues two HTTP range requests, so this is the practical request fan-out.
+const fetchBundleConcurrency = 64
+
+// fetchBundlesParallel downloads bundles for tests concurrently while preserving
+// the input ordering. It prints `\r[i/N] P%` to stderr as bundles complete and
+// aborts on the first error.
+func fetchBundlesParallel(ctx context.Context, client *Client, ff fetchFlags, run ListingRun, suiteResult *SuiteResult, tests []TestMatch) ([]BundleSummary, error) {
+	bundles := make([]BundleSummary, len(tests))
+
+	fetchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg         sync.WaitGroup
+		sem        = make(chan struct{}, fetchBundleConcurrency)
+		errOnce    sync.Once
+		firstErr   error
+		progressMu sync.Mutex
+		done       int
+	)
+
+	for i, match := range tests {
+		select {
+		case <-fetchCtx.Done():
+			break
+		case sem <- struct{}{}:
+		}
+		wg.Add(1)
+		go func(i int, match TestMatch) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			bundle, err := fetchBundle(fetchCtx, client, ff, run, suiteResult, match)
+			if err != nil {
+				errOnce.Do(func() {
+					firstErr = err
+					cancel()
+				})
+				return
+			}
+			bundles[i] = bundle
+			progressMu.Lock()
+			done++
+			fmt.Fprintf(os.Stderr, "\r[%d/%d] %d%%", done, len(tests), done*100/len(tests))
+			progressMu.Unlock()
+		}(i, match)
+	}
+	wg.Wait()
+	fmt.Fprintln(os.Stderr)
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return bundles, nil
 }
 
 func suiteDuration(suite *SuiteResult) time.Duration {
