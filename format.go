@@ -10,6 +10,23 @@ import (
 	"time"
 )
 
+func formatRunHeader(runFile string, runStart time.Time, websiteURL string) string {
+	parts := make([]string, 0, 3)
+	if runFile != "" {
+		parts = append(parts, "run="+strings.TrimSuffix(runFile, ".json"))
+	}
+	if !runStart.IsZero() {
+		parts = append(parts, "date="+formatTime(runStart))
+	}
+	if websiteURL != "" {
+		parts = append(parts, "url="+websiteURL)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Ethpandaops: " + strings.Join(parts, ", ")
+}
+
 func formatHiveVersion(hv *HiveVersion) string {
 	if hv == nil {
 		return ""
@@ -28,11 +45,14 @@ func formatHiveVersion(hv *HiveVersion) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return "hive " + strings.Join(parts, ", ")
+	return "Hive: " + strings.Join(parts, ", ")
 }
 
 func formatClientInfo(name, branch, commit, version string) string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
+	if name != "" {
+		parts = append(parts, name)
+	}
 	if branch != "" {
 		parts = append(parts, "branch="+branch)
 	}
@@ -42,10 +62,10 @@ func formatClientInfo(name, branch, commit, version string) string {
 	if version != "" {
 		parts = append(parts, "version="+version)
 	}
-	if len(parts) == 0 {
+	if len(parts) <= 1 {
 		return ""
 	}
-	return name + " " + strings.Join(parts, ", ")
+	return "Client: " + strings.Join(parts, ", ")
 }
 
 func formatFixtures(fx fixturesInfo) string {

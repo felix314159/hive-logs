@@ -341,7 +341,9 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 		}
 	}
 	fmt.Printf("%s / %s\n", group, suite)
-	fmt.Printf("%s\nrun=%s\n", formatTime(newest.RunStart), strings.TrimSuffix(newest.RunFile, ".json"))
+	if line := formatRunHeader(newest.RunFile, newest.RunStart, hiveTestURL(client.baseURL, group, newest.RunFile)); line != "" {
+		fmt.Println(line)
+	}
 	if line := formatHiveVersion(hiveVersion); line != "" {
 		fmt.Println(line)
 	}
@@ -446,17 +448,22 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 	printBundlesGroupedByFile(os.Stdout, bundles)
 	fmt.Printf("\n%s\n", divider)
 	fmt.Printf("%s / %s / %s\n", group, suite, clientName)
-	fmt.Printf("%s\nrun=%s\n", formatTime(run.Start), strings.TrimSuffix(run.FileName, ".json"))
+	if line := formatRunHeader(run.FileName, run.Start, bundles[0].WebsiteURL); line != "" {
+		fmt.Println(line)
+	}
 	if suiteResult.RunMetadata != nil {
 		if line := formatHiveVersion(suiteResult.RunMetadata.HiveVersion); line != "" {
 			fmt.Println(line)
 		}
 	}
+	if line := formatFixtures(suiteFixtures(suiteResult)); line != "" {
+		fmt.Println(line)
+	}
 	clientVersion, clientCommit := suiteClientVersionInfo(suiteResult, clientName)
 	if line := formatClientInfo(clientName, suiteClientBranch(suiteResult), clientCommit, clientVersion); line != "" {
 		fmt.Println(line)
 	}
-	fmt.Printf("url=%s\n\n", bundles[0].WebsiteURL)
+	fmt.Println()
 	fileCount := countTestFiles(bundles)
 	fmt.Printf("%s%s%s\n",
 		ansiRed, formatVectorFileCount(len(bundles), fileCount), ansiReset)

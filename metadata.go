@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+func hiveTestURL(baseURL, group, runFile string) string {
+	return fmt.Sprintf(hiveTestURLFormat,
+		strings.TrimRight(baseURL, "/"),
+		url.PathEscape(group),
+		url.PathEscape(strings.TrimSuffix(runFile, ".json")))
+}
+
 type BundleSummary struct {
 	Directory             string   `json:"directory"`
 	WebsiteURL            string   `json:"website_url"`
@@ -70,7 +77,7 @@ func buildMetadata(baseURL, group string, run ListingRun, suite *SuiteResult, ma
 		ClientVersions:  suite.ClientVersions,
 		RunStart:        run.Start,
 		RunFile:         run.FileName,
-		WebsiteURL:      fmt.Sprintf(hiveTestURLFormat, strings.TrimRight(baseURL, "/"), url.PathEscape(group), url.PathEscape(strings.TrimSuffix(run.FileName, ".json"))),
+		WebsiteURL:      hiveTestURL(baseURL, group, run.FileName),
 		TestID:          match.TestID,
 		TestName:        match.Test.Name,
 		TestDescription: cleanDescription(match.Test.Description),

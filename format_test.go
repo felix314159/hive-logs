@@ -8,14 +8,18 @@ import (
 )
 
 func TestFormatVersionFixtureAndClientLines(t *testing.T) {
-	if got := formatHiveVersion(&HiveVersion{Branch: "main", Commit: "abcdef123456"}); got != "hive branch=main, commit=abcdef1" {
+	if got := formatHiveVersion(&HiveVersion{Branch: "main", Commit: "abcdef123456"}); got != "Hive: branch=main, commit=abcdef1" {
 		t.Fatalf("formatHiveVersion() = %q", got)
 	}
-	if got := formatClientInfo("reth", "main", "1234567", "1.0.0"); got != "reth branch=main, commit=1234567, version=1.0.0" {
+	if got := formatClientInfo("reth", "main", "1234567", "1.0.0"); got != "Client: reth, branch=main, commit=1234567, version=1.0.0" {
 		t.Fatalf("formatClientInfo() = %q", got)
 	}
 	if got := formatFixtures(fixturesInfo{Branch: "dev", Release: "v1", URL: "https://example.test"}); got != "EELS: branch=dev, fixtures=v1, url=https://example.test" {
 		t.Fatalf("formatFixtures() = %q", got)
+	}
+	start := time.Date(2026, 4, 28, 9, 1, 24, 0, time.UTC).Local()
+	if got := formatRunHeader("1234567-abcdef.json", start, "https://example.test/run"); got != "Ethpandaops: run=1234567-abcdef, date="+formatTime(start)+", url=https://example.test/run" {
+		t.Fatalf("formatRunHeader() = %q", got)
 	}
 }
 
