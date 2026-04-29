@@ -260,14 +260,17 @@ func TestPrintBundlesGroupedByFile(t *testing.T) {
 	var buf bytes.Buffer
 	printBundlesGroupedByFile(&buf, bundles)
 	out := buf.String()
-	if !strings.Contains(out, "tests/foo.py\n  • test_a[x]") {
-		t.Fatalf("missing foo.py header with indented bullet:\n%s", out)
+	if !strings.Contains(out, ansiRed+"tests/foo.py"+ansiReset+"\n  • "+ansiOrange+"test_a[x]"+ansiReset) {
+		t.Fatalf("missing red foo.py header with orange-labeled bullet:\n%s", out)
 	}
-	if !strings.Contains(out, "  • test_a[y]") {
-		t.Fatalf("missing second foo.py vector:\n%s", out)
+	if !strings.Contains(out, "  • "+ansiOrange+"test_a[y]"+ansiReset) {
+		t.Fatalf("missing second foo.py orange-labeled vector:\n%s", out)
 	}
-	if !strings.Contains(out, "tests/bar.py\n  • test_z") {
-		t.Fatalf("missing bar.py header with indented bullet:\n%s", out)
+	if !strings.Contains(out, ansiRed+"tests/bar.py"+ansiReset+"\n  • "+ansiOrange+"test_z"+ansiReset) {
+		t.Fatalf("missing red bar.py header with orange-labeled bullet:\n%s", out)
+	}
+	if !strings.Contains(out, ansiGrey+strings.Repeat("─", 80)+ansiReset) {
+		t.Fatalf("missing grey divider between groups:\n%s", out)
 	}
 	fooIdx := strings.Index(out, "tests/foo.py")
 	barIdx := strings.Index(out, "tests/bar.py")
@@ -286,8 +289,8 @@ func TestPrintBundlesGroupedByFileNoFile(t *testing.T) {
 	if strings.Contains(out, "  •") {
 		t.Fatalf("unexpected indentation when no file is present:\n%s", out)
 	}
-	if !strings.HasPrefix(out, "• client launch\n") {
-		t.Fatalf("expected unindented bullet, got:\n%s", out)
+	if !strings.HasPrefix(out, "• "+ansiOrange+"client launch"+ansiReset+"\n") {
+		t.Fatalf("expected unindented orange-labeled bullet, got:\n%s", out)
 	}
 }
 

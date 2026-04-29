@@ -107,9 +107,11 @@ func formatHMS(d time.Duration) string {
 }
 
 const (
-	ansiGreen = "\x1b[32m"
-	ansiRed   = "\x1b[31m"
-	ansiReset = "\x1b[0m"
+	ansiGreen  = "\x1b[32m"
+	ansiRed    = "\x1b[31m"
+	ansiGrey   = "\x1b[90m"
+	ansiOrange = "\x1b[38;5;208m"
+	ansiReset  = "\x1b[0m"
 )
 
 type textTable struct {

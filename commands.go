@@ -520,16 +520,18 @@ func printBundlesGroupedByFile(w io.Writer, bundles []BundleSummary) {
 		g.bundles = append(g.bundles, b)
 	}
 
+	groupDivider := strings.Repeat("─", 80)
 	first := true
 	for _, key := range order {
 		g := groups[key]
 		if !first {
 			fmt.Fprintln(w)
+			fmt.Fprintf(w, "%s%s%s\n", ansiGrey, groupDivider, ansiReset)
 		}
 		first = false
 		bulletIndent := ""
 		if g.file != "" {
-			fmt.Fprintln(w, g.file)
+			fmt.Fprintf(w, "%s%s%s\n", ansiRed, g.file, ansiReset)
 			bulletIndent = "  "
 		}
 		for i, b := range g.bundles {
@@ -540,7 +542,7 @@ func printBundlesGroupedByFile(w io.Writer, bundles []BundleSummary) {
 			if label == "" {
 				label = b.TestName
 			}
-			fmt.Fprintf(w, "%s• %s\n", bulletIndent, label)
+			fmt.Fprintf(w, "%s• %s%s%s\n", bulletIndent, ansiOrange, label, ansiReset)
 			fmt.Fprintf(w, "%s    hive log:    %s\n", bulletIndent, b.HiveLogPath)
 			fmt.Fprintf(w, "%s    client log:  %s\n", bulletIndent, b.ClientLogPath)
 			fmt.Fprintf(w, "%s    reproduce:   %s\n", bulletIndent, b.ReproduceCommandsPath)
