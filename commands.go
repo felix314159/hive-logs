@@ -465,6 +465,9 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 	}
 	fmt.Println()
 	fileCount := countTestFiles(bundles)
+	if len(bundles) > 0 {
+		fmt.Printf("%sAll logs of failed tests have been stored in ./%s%s\n", ansiGreen, ff.outDir, ansiReset)
+	}
 	fmt.Printf("%s%s%s\n",
 		ansiRed, formatVectorFileCount(len(bundles), fileCount), ansiReset)
 	return nil
