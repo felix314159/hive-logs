@@ -625,14 +625,21 @@ func printBundlesGroupedByFile(w io.Writer, bundles []BundleSummary, showLogPath
 				fmt.Fprintln(w)
 			}
 			label := b.TestVector
-			if label == "" {
+			if label == "" && b.TestFile == "" {
 				label = b.TestName
 			}
-			fmt.Fprintf(w, "%s• %s%s%s\n", bulletIndent, ansiOrange, label, ansiReset)
+			hasBullet := label != ""
+			if hasBullet {
+				fmt.Fprintf(w, "%s• %s%s%s\n", bulletIndent, ansiOrange, label, ansiReset)
+			}
 			if showLogPaths {
-				fmt.Fprintf(w, "%s    hive log:    %s\n", bulletIndent, b.HiveLogPath)
-				fmt.Fprintf(w, "%s    client log:  %s\n", bulletIndent, b.ClientLogPath)
-				fmt.Fprintf(w, "%s    reproduce:   %s\n", bulletIndent, b.ReproduceCommandsPath)
+				pathIndent := bulletIndent
+				if hasBullet {
+					pathIndent += "    "
+				}
+				fmt.Fprintf(w, "%shive log:    %s\n", pathIndent, b.HiveLogPath)
+				fmt.Fprintf(w, "%sclient log:  %s\n", pathIndent, b.ClientLogPath)
+				fmt.Fprintf(w, "%sreproduce:   %s\n", pathIndent, b.ReproduceCommandsPath)
 			}
 		}
 	}

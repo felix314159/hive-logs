@@ -65,6 +65,9 @@ func TestSplitTestName(t *testing.T) {
 		{"plain test name", "", "plain test name"},
 		{"::leading", "", "leading"},
 		{"Blob Transaction Ordering, Multiple Accounts (Cancun) (geth_default)", "Blob Transaction Ordering", "Multiple Accounts (Cancun) (geth_default)"},
+		// The consensus simulator's "test file loader" meta-test has no inner
+		// vector and must be treated as a file-only entry, not a bullet orphan.
+		{"test file loader", "test file loader", ""},
 	}
 	for _, tc := range cases {
 		gotFile, gotVector := splitTestName(tc.name)

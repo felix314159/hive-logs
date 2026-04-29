@@ -406,6 +406,36 @@ func TestPrintBundlesGroupedByFileNoFile(t *testing.T) {
 	}
 }
 
+// A "test file loader" bundle has TestFile set but TestVector empty: the
+// printer must show it as a file header with no vector bullet beneath it,
+// instead of repeating the name as an orphan bullet.
+func TestPrintBundlesGroupedByFileFileWithoutVector(t *testing.T) {
+	bundles := []BundleSummary{
+		{
+			TestName:              "test file loader",
+			TestFile:              "test file loader",
+			TestVector:            "",
+			HiveLogPath:           "logs/loader/hive.log",
+			ClientLogPath:         "logs/loader/client.log",
+			ReproduceCommandsPath: "logs/loader/reproduce_commands.md",
+		},
+	}
+	var buf bytes.Buffer
+	printBundlesGroupedByFile(&buf, bundles, true)
+	out := buf.String()
+	if !strings.Contains(out, ansiRed+"test file loader"+ansiReset+"\n") {
+		t.Fatalf("expected red file header for loader meta-test:\n%s", out)
+	}
+	if strings.Contains(out, "•") {
+		t.Fatalf("file-only bundle should not produce a bullet:\n%s", out)
+	}
+	for _, want := range []string{"hive log:", "client log:", "reproduce:"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected log paths beneath file header, missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestSuiteDurationUsesEarliestStartAndLatestEnd(t *testing.T) {
 	suite := &SuiteResult{TestCases: map[string]TestCase{
 		"1": {

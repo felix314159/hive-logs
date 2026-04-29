@@ -12,6 +12,15 @@ import (
 
 var errNoClientLog = errors.New("no client log exists for this test")
 
+// minClientLogSliceBytes is the smallest LogOffsets slice we treat as
+// meaningful. Hive sometimes records a 1-byte (or 0-byte) slice for a test
+// that was never actually executed — for example, when the consensus
+// simulator's "test file loader" meta-test fails and the per-test offsets
+// just point at the current end of the client log file. Below this
+// threshold we ignore the slice and fetch the entire client log so the
+// bundle isn't effectively empty.
+const minClientLogSliceBytes = 64
+
 func fetchHiveLog(ctx context.Context, client *Client, group string, suite *SuiteResult, match TestMatch) ([]byte, error) {
 	if suite.TestDetailsLog == "" {
 		return []byte(match.Test.SummaryResult.Details), nil
@@ -51,7 +60,8 @@ func fetchClientLogs(ctx context.Context, client *Client, ff fetchFlags, match T
 		files = append(files, info.LogFile)
 		fmt.Fprintf(&out, "===== client %s id=%s ip=%s log=%s =====\n", info.Name, info.ID, info.IP, info.LogFile)
 		begin, end := int64(-1), int64(-1)
-		if !ff.fullClient && info.LogOffsets != nil {
+		if !ff.fullClient && info.LogOffsets != nil &&
+			info.LogOffsets.End-info.LogOffsets.Begin >= minClientLogSliceBytes {
 			begin, end = info.LogOffsets.Begin, info.LogOffsets.End
 		}
 		data, err := client.getRange(ctx, pathJoin(ff.common.group, hiveResultsDir, info.LogFile), begin, end)

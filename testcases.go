@@ -73,8 +73,14 @@ func sortMatches(matches []TestMatch) {
 //     (e.g. "Blob Transaction Ordering, Multiple Accounts (Cancun) (geth)");
 //     the prefix is treated as the category/file.
 //
-// Names matching neither return ("", name).
+// Names matching neither return ("", name), except for the well-known
+// "test file loader" meta-test emitted by the consensus simulator: it loads
+// the JSON test files and launches the per-vector tests, so it has no inner
+// vector and is treated as a file-only entry.
 func splitTestName(name string) (file, vector string) {
+	if name == "test file loader" {
+		return name, ""
+	}
 	if i := strings.Index(name, "::"); i >= 0 {
 		return name[:i], name[i+2:]
 	}
