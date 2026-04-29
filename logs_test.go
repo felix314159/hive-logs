@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -127,6 +128,52 @@ func TestFetchClientLogsFallsBackToFullLogForDegenerateOffsets(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "full client log content") {
 		t.Fatalf("expected full log content in bundle, got:\n%s", data)
+	}
+}
+
+// When the recorded slice is technically non-degenerate (e.g. 127 bytes,
+// above minClientLogSliceBytes) but the underlying log file is dramatically
+// larger, the slice almost certainly captures only a tiny window of client
+// activity (hive's consensus simulator records offsets around a narrow RPC
+// interaction, not the full per-test client lifetime). fetchClientLogs must
+// detect this via Content-Range and refetch the full log so the bundle is
+// useful for diagnosis.
+func TestFetchClientLogsFallsBackToFullLogForTinySliceOfLargeFile(t *testing.T) {
+	const fullLog = "this is the full client log with the actual failure context, " +
+		"hundreds of lines of test execution, and the error that caused the test to fail"
+	repeated := strings.Repeat(fullLog, 200) // ~30KB so the 127-byte slice is dwarfed.
+	begin, end := int64(45000), int64(45127)
+	// Pad so the requested offsets resolve inside the file.
+	body := strings.Repeat("x", 45000) + repeated
+
+	var ranges []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ranges = append(ranges, r.Header.Get("Range"))
+		if r.Header.Get("Range") != "" {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", begin, end-1, len(body)))
+			w.WriteHeader(http.StatusPartialContent)
+			w.Write([]byte(body[begin:end]))
+			return
+		}
+		w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	match := TestMatch{Test: TestCase{ClientInfo: map[string]ClientInfo{
+		"1": {ID: "1", Name: "first", IP: "10.0.0.1", LogFile: "client.log", LogOffsets: &LogRange{Begin: begin, End: end}},
+	}}}
+	data, _, err := fetchClientLogs(context.Background(), newClient(server.URL), fetchFlags{common: commonFlags{group: "generic"}}, match)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranges) != 2 {
+		t.Fatalf("expected slice fetch followed by full-log fetch, got requests %v", ranges)
+	}
+	if ranges[0] == "" || ranges[1] != "" {
+		t.Fatalf("expected first request with Range and second without, got %v", ranges)
+	}
+	if !strings.Contains(string(data), "actual failure context") {
+		t.Fatalf("expected refetched full log content in bundle, got:\n%s", data)
 	}
 }
 

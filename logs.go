@@ -21,6 +21,16 @@ var errNoClientLog = errors.New("no client log exists for this test")
 // bundle isn't effectively empty.
 const minClientLogSliceBytes = 64
 
+// minClientLogSliceFraction triggers a fall-back to the full client log
+// when the recorded slice is smaller than 1/N of the underlying file. The
+// consensus simulator (used by suites like legacy and legacy-cancun)
+// records offsets around a narrow window of client activity, so the slice
+// can be a few hundred bytes of an otherwise multi-KB log that contains
+// the actual test failure. In that case the slice is technically valid
+// but useless for diagnosis, and refetching the full log is much more
+// helpful than the few lines hive happened to capture.
+const minClientLogSliceFraction = 10
+
 func fetchHiveLog(ctx context.Context, client *Client, group string, suite *SuiteResult, match TestMatch) ([]byte, error) {
 	if suite.TestDetailsLog == "" {
 		return []byte(match.Test.SummaryResult.Details), nil
@@ -64,10 +74,17 @@ func fetchClientLogs(ctx context.Context, client *Client, ff fetchFlags, match T
 			info.LogOffsets.End-info.LogOffsets.Begin >= minClientLogSliceBytes {
 			begin, end = info.LogOffsets.Begin, info.LogOffsets.End
 		}
-		data, err := client.getRange(ctx, pathJoin(ff.common.group, hiveResultsDir, info.LogFile), begin, end)
+		logPath := pathJoin(ff.common.group, hiveResultsDir, info.LogFile)
+		data, fileSize, err := client.getRangeWithSize(ctx, logPath, begin, end)
 		if err != nil {
 			fmt.Fprintf(&out, "failed to fetch log: %v\n\n", err)
 			continue
+		}
+		if begin >= 0 && fileSize > 0 && int64(len(data))*minClientLogSliceFraction < fileSize {
+			full, _, fullErr := client.getRangeWithSize(ctx, logPath, -1, -1)
+			if fullErr == nil {
+				data = full
+			}
 		}
 		out.Write(data)
 		if len(data) == 0 || data[len(data)-1] != '\n' {

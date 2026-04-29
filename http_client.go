@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -141,33 +142,62 @@ func (c *Client) getJSONStream(ctx context.Context, path string, v any) error {
 }
 
 func (c *Client) getRange(ctx context.Context, path string, begin, end int64) ([]byte, error) {
+	data, _, err := c.getRangeWithSize(ctx, path, begin, end)
+	return data, err
+}
+
+// getRangeWithSize behaves like getRange but additionally reports the size of
+// the underlying file when the server makes it discoverable. Total size comes
+// from the Content-Range header on a 206 response (e.g. `bytes 0-99/12345`)
+// or from the body length of a full 200 response. When the size cannot be
+// determined, totalSize is -1.
+func (c *Client) getRangeWithSize(ctx context.Context, path string, begin, end int64) ([]byte, int64, error) {
 	u := c.baseURL + "/" + strings.TrimLeft(path, "/")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
 	if begin >= 0 && end > begin {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", begin, end-1))
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", u, err)
+		return nil, -1, fmt.Errorf("GET %s: %w", u, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		return nil, fmt.Errorf("GET %s: status %d", u, resp.StatusCode)
+		return nil, -1, fmt.Errorf("GET %s: status %d", u, resp.StatusCode)
 	}
 
 	const maxLogBytes = 200 << 20
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxLogBytes))
 	if err != nil {
-		return nil, err
+		return nil, -1, err
 	}
+	totalSize := parseContentRangeTotal(resp.Header.Get("Content-Range"))
 	if resp.StatusCode == http.StatusOK && begin >= 0 && end > begin {
 		if end <= int64(len(data)) {
-			return data[begin:end], nil
+			return data[begin:end], int64(len(data)), nil
 		}
-		return nil, fmt.Errorf("server ignored range and log is too small for [%d,%d)", begin, end)
+		return nil, int64(len(data)), fmt.Errorf("server ignored range and log is too small for [%d,%d)", begin, end)
 	}
-	return data, nil
+	if totalSize < 0 && resp.StatusCode == http.StatusOK {
+		totalSize = int64(len(data))
+	}
+	return data, totalSize, nil
+}
+
+// parseContentRangeTotal extracts the total file size from a Content-Range
+// header value like `bytes 0-499/1234`. Returns -1 when the size is missing,
+// unknown ("*"), or unparseable.
+func parseContentRangeTotal(value string) int64 {
+	idx := strings.LastIndex(value, "/")
+	if idx < 0 {
+		return -1
+	}
+	size, err := strconv.ParseInt(strings.TrimSpace(value[idx+1:]), 10, 64)
+	if err != nil {
+		return -1
+	}
+	return size
 }
