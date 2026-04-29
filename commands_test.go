@@ -13,6 +13,33 @@ import (
 	"time"
 )
 
+func TestCmdQueryClientWithoutSuiteListsAvailableWhenMultiple(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/discovery.json":
+			fmt.Fprint(w, `[{"name":"generic"}]`)
+		case "/generic/listing.jsonl":
+			writeListingRuns(t, w, []ListingRun{
+				{Name: "suite-a", Start: time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC), Clients: []string{"besu_main"}},
+				{Name: "suite-b", Start: time.Date(2026, 4, 28, 13, 0, 0, 0, time.UTC), Clients: []string{"besu_main"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	err := cmdQuery([]string{"--base-url", server.URL, "group=generic", "client=besu"})
+	if err == nil {
+		t.Fatal("expected error when multiple suites and suite= is missing")
+	}
+	for _, want := range []string{"multiple suites", "suite-a", "suite-b"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not contain %q", err.Error(), want)
+		}
+	}
+}
+
 func TestCmdListCombinesGroupsSuitesAndClients(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

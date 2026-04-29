@@ -27,15 +27,28 @@ func cmdQuery(args []string) error {
 		}
 		return errors.New("group= is required")
 	}
-	if qf.common.client != "" && qf.common.suite == "" {
-		return errors.New("client= requires suite= to be set")
-	}
-
 	ctx := context.Background()
 	client := newClient(qf.baseURL)
 
 	if err := ensureGroupExists(ctx, client, qf.common.group); err != nil {
 		return err
+	}
+
+	if qf.common.client != "" && qf.common.suite == "" {
+		runs, err := fetchListing(ctx, client, qf.common.group)
+		if err != nil {
+			return err
+		}
+		suites := availableSuites(runs)
+		switch len(suites) {
+		case 0:
+			return fmt.Errorf("client= requires suite= to be set; group %q has no suites", qf.common.group)
+		case 1:
+			qf.common.suite = suites[0]
+		default:
+			return fmt.Errorf("client= requires suite= to be set when group %q has multiple suites; available suites: %s",
+				qf.common.group, strings.Join(suites, ", "))
+		}
 	}
 
 	if qf.common.client != "" {
