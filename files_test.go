@@ -62,12 +62,16 @@ func TestSplitTestName(t *testing.T) {
 		wantVector string
 	}{
 		{"tests/foo.py::test_bar[x]-geth", "tests/foo.py", "test_bar[x]-geth"},
-		{"plain test name", "", "plain test name"},
+		// Names that match neither separator convention are file-only:
+		// they stand on their own and must render as a file header rather
+		// than as a bullet orphan. Covers consensus's "test file loader"
+		// meta-test and discv4-style "ENRRequest (nimbus-el_default)".
+		{"plain test name", "plain test name", ""},
+		{"test file loader", "test file loader", ""},
+		{"ENRRequest (nimbus-el_default)", "ENRRequest (nimbus-el_default)", ""},
+		{"Amplification/WrongIP (nimbus-el_default)", "Amplification/WrongIP (nimbus-el_default)", ""},
 		{"::leading", "", "leading"},
 		{"Blob Transaction Ordering, Multiple Accounts (Cancun) (geth_default)", "Blob Transaction Ordering", "Multiple Accounts (Cancun) (geth_default)"},
-		// The consensus simulator's "test file loader" meta-test has no inner
-		// vector and must be treated as a file-only entry, not a bullet orphan.
-		{"test file loader", "test file loader", ""},
 	}
 	for _, tc := range cases {
 		gotFile, gotVector := splitTestName(tc.name)

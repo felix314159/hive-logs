@@ -227,11 +227,13 @@ func bundleDirName(group, suite, client string, run ListingRun, match TestMatch)
 		sanitizeFileName(normalizeClient(client)),
 	)
 
-	if file != "" {
+	if file != "" && vector != "" {
 		fileLeaf := truncateBundleName(sanitizeFileName(file)) + "-" + runSuffix
 		return strings.ToLower(filepath.Join(base, fileLeaf, bundleVectorLeaf(vector, match.TestID)))
 	}
-
+	// File-only entry (or unparsed name): keep the bundle in a single
+	// flat directory so non-pytest suites like discv4 don't grow an extra
+	// nested vector level for tests that have no inner vector.
 	leaf := bundleVectorLeaf(match.Test.Name, match.TestID) + "-" + runSuffix
 	return strings.ToLower(filepath.Join(base, leaf))
 }

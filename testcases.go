@@ -73,19 +73,17 @@ func sortMatches(matches []TestMatch) {
 //     (e.g. "Blob Transaction Ordering, Multiple Accounts (Cancun) (geth)");
 //     the prefix is treated as the category/file.
 //
-// Names matching neither return ("", name), except for the well-known
-// "test file loader" meta-test emitted by the consensus simulator: it loads
-// the JSON test files and launches the per-vector tests, so it has no inner
-// vector and is treated as a file-only entry.
+// Names matching neither convention have no inner vector — every test in
+// suites like discv4 ("ENRRequest (nimbus-el_default)") or the consensus
+// simulator's "test file loader" meta-test stands on its own. They're
+// returned as (name, "") so they render as standalone file headers rather
+// than as bullet orphans grouped under no file.
 func splitTestName(name string) (file, vector string) {
-	if name == "test file loader" {
-		return name, ""
-	}
 	if i := strings.Index(name, "::"); i >= 0 {
 		return name[:i], name[i+2:]
 	}
 	if i := strings.Index(name, ", "); i >= 0 {
 		return name[:i], name[i+2:]
 	}
-	return "", name
+	return name, ""
 }
