@@ -39,7 +39,7 @@ func cmdQuery(args []string) error {
 	}
 
 	if qf.common.client != "" {
-		return fetchSuiteClientFailures(ctx, client, qf.common.group, qf.common.suite, qf.common.client, qf.json)
+		return fetchSuiteClientFailures(ctx, client, qf.common.group, qf.common.suite, qf.common.client, qf.json, qf.showLogPaths)
 	}
 	if qf.common.suite != "" {
 		return listSuiteClients(ctx, client, qf.common.group, qf.common.suite, qf.json, qf.withDuration)
@@ -382,7 +382,7 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 	return nil
 }
 
-func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite, clientName string, jsonOut bool) error {
+func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite, clientName string, jsonOut, showLogPaths bool) error {
 	if !isKnownClientName(clientName) {
 		return fmt.Errorf("client %q does not exist, the following clients exist: %s", clientName, strings.Join(hiveKnownClients, ", "))
 	}
@@ -445,7 +445,7 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 
 	divider := strings.Repeat("─", 80)
 	fmt.Println(divider)
-	printBundlesGroupedByFile(os.Stdout, bundles)
+	printBundlesGroupedByFile(os.Stdout, bundles, showLogPaths)
 	fmt.Printf("\n%s\n", divider)
 	fmt.Printf("%s / %s / %s\n", group, suite, clientName)
 	if line := formatRunHeader(run.FileName, run.Start, bundles[0].WebsiteURL); line != "" {
@@ -502,8 +502,10 @@ func countTestFiles(bundles []BundleSummary) int {
 
 // printBundlesGroupedByFile prints bundles grouped by their test file. Within
 // a group, bullets are indented under the file header. Bundles with no test
-// file (no `::` in the test name) are printed last with no header.
-func printBundlesGroupedByFile(w io.Writer, bundles []BundleSummary) {
+// file (no `::` in the test name) are printed last with no header. When
+// showLogPaths is false, only the file header and test-vector bullets are
+// printed (the per-bundle hive/client/reproduce paths are suppressed).
+func printBundlesGroupedByFile(w io.Writer, bundles []BundleSummary, showLogPaths bool) {
 	type group struct {
 		file    string
 		bundles []BundleSummary
@@ -535,7 +537,7 @@ func printBundlesGroupedByFile(w io.Writer, bundles []BundleSummary) {
 			bulletIndent = "  "
 		}
 		for i, b := range g.bundles {
-			if i > 0 {
+			if i > 0 && showLogPaths {
 				fmt.Fprintln(w)
 			}
 			label := b.TestVector
@@ -543,9 +545,11 @@ func printBundlesGroupedByFile(w io.Writer, bundles []BundleSummary) {
 				label = b.TestName
 			}
 			fmt.Fprintf(w, "%s• %s%s%s\n", bulletIndent, ansiOrange, label, ansiReset)
-			fmt.Fprintf(w, "%s    hive log:    %s\n", bulletIndent, b.HiveLogPath)
-			fmt.Fprintf(w, "%s    client log:  %s\n", bulletIndent, b.ClientLogPath)
-			fmt.Fprintf(w, "%s    reproduce:   %s\n", bulletIndent, b.ReproduceCommandsPath)
+			if showLogPaths {
+				fmt.Fprintf(w, "%s    hive log:    %s\n", bulletIndent, b.HiveLogPath)
+				fmt.Fprintf(w, "%s    client log:  %s\n", bulletIndent, b.ClientLogPath)
+				fmt.Fprintf(w, "%s    reproduce:   %s\n", bulletIndent, b.ReproduceCommandsPath)
+			}
 		}
 	}
 }

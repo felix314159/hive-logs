@@ -258,7 +258,7 @@ func TestPrintBundlesGroupedByFile(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	printBundlesGroupedByFile(&buf, bundles)
+	printBundlesGroupedByFile(&buf, bundles, true)
 	out := buf.String()
 	if !strings.Contains(out, ansiRed+"tests/foo.py"+ansiReset+"\n  • "+ansiOrange+"test_a[x]"+ansiReset) {
 		t.Fatalf("missing red foo.py header with orange-labeled bullet:\n%s", out)
@@ -272,10 +272,37 @@ func TestPrintBundlesGroupedByFile(t *testing.T) {
 	if !strings.Contains(out, ansiGrey+strings.Repeat("─", 80)+ansiReset) {
 		t.Fatalf("missing grey divider between groups:\n%s", out)
 	}
+	if !strings.Contains(out, "hive log:") || !strings.Contains(out, "client log:") || !strings.Contains(out, "reproduce:") {
+		t.Fatalf("expected log paths when showLogPaths=true:\n%s", out)
+	}
 	fooIdx := strings.Index(out, "tests/foo.py")
 	barIdx := strings.Index(out, "tests/bar.py")
 	if fooIdx == -1 || barIdx == -1 || fooIdx > barIdx {
 		t.Fatalf("groups out of order:\n%s", out)
+	}
+}
+
+func TestPrintBundlesGroupedByFileHidesLogPathsByDefault(t *testing.T) {
+	bundles := []BundleSummary{
+		{
+			TestName:              "tests/foo.py::test_a",
+			TestFile:              "tests/foo.py",
+			TestVector:            "test_a",
+			HiveLogPath:           "logs/foo/a/hive.log",
+			ClientLogPath:         "logs/foo/a/client.log",
+			ReproduceCommandsPath: "logs/foo/a/reproduce_commands.md",
+		},
+	}
+	var buf bytes.Buffer
+	printBundlesGroupedByFile(&buf, bundles, false)
+	out := buf.String()
+	if !strings.Contains(out, ansiRed+"tests/foo.py"+ansiReset+"\n  • "+ansiOrange+"test_a"+ansiReset) {
+		t.Fatalf("missing red header + orange bullet:\n%s", out)
+	}
+	for _, banned := range []string{"hive log:", "client log:", "reproduce:", "logs/foo/a"} {
+		if strings.Contains(out, banned) {
+			t.Fatalf("output should not contain %q when showLogPaths=false:\n%s", banned, out)
+		}
 	}
 }
 
@@ -284,7 +311,7 @@ func TestPrintBundlesGroupedByFileNoFile(t *testing.T) {
 		{TestName: "client launch", HiveLogPath: "h", ClientLogPath: "c", ReproduceCommandsPath: "r"},
 	}
 	var buf bytes.Buffer
-	printBundlesGroupedByFile(&buf, bundles)
+	printBundlesGroupedByFile(&buf, bundles, true)
 	out := buf.String()
 	if strings.Contains(out, "  •") {
 		t.Fatalf("unexpected indentation when no file is present:\n%s", out)

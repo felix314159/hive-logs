@@ -75,8 +75,10 @@ Usage:
       Per-client pass/fail counts, run start, branch, commit, and version for
       the latest SUITE run in GROUP. Add --duration to also fetch run wall-time
       (slower; downloads the full suite JSON).
-  group=GROUP suite=SUITE client=CLIENT [--json]
+  group=GROUP suite=SUITE client=CLIENT [--json] [--show-log-paths]
       List CLIENT's failing tests in the latest SUITE run and download
       hive.log + <CLIENT>.log bundles for each into ./logs.
+      Add --show-log-paths to also print the hive/client/reproduce paths
+      next to each test vector.
 `)
 }

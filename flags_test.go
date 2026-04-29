@@ -12,6 +12,7 @@ func TestParseQueryArgsInterleavesFlagsAndKeyValues(t *testing.T) {
 		"--limit", "3",
 		"--all=false",
 		"--files",
+		"--show-log-paths",
 		"--json=true",
 		"suite=eels/consume-rlp",
 		"client=nimbus-el",
@@ -21,7 +22,7 @@ func TestParseQueryArgsInterleavesFlagsAndKeyValues(t *testing.T) {
 	}
 
 	if qf.baseURL != "https://example.test" || qf.limit != 3 || qf.all ||
-		!qf.showFiles || !qf.json {
+		!qf.showFiles || !qf.showLogPaths || !qf.json {
 		t.Fatalf("query flags = %+v", qf)
 	}
 	if qf.common.group != "generic" || qf.common.suite != "eels/consume-rlp" || qf.common.client != "nimbus-el" {

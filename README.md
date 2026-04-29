@@ -59,6 +59,30 @@ bundles into `./logs`:
 go run . group=generic suite=eels/consume-engine client=go-ethereum
 ```
 
+By default the output groups failing test vectors under their test file (without
+the per-vector log paths), e.g.:
+
+```text
+tests/shanghai/eip4895_withdrawals/test_withdrawals.py
+  • test_large_amount[fork_Shanghai-blockchain_test]-go-ethereum_default
+  • TestMultipleWithdrawalsSameAddress::test_multiple_withdrawals_same_address[fork_Shanghai-blockchain_test-test_case_multiple_blocks]-go-ethereum_default
+```
+
+Pass `--show-log-paths` to also print the `hive log:`, `client log:`, and
+`reproduce:` paths next to each test vector:
+
+```sh
+go run . group=generic suite=eels/consume-engine client=go-ethereum --show-log-paths
+```
+
+```text
+tests/shanghai/eip4895_withdrawals/test_withdrawals.py
+  • test_large_amount[fork_Shanghai-blockchain_test]-go-ethereum_default
+      hive log:    logs/.../hive.log
+      client log:  logs/.../go-ethereum.log
+      reproduce:   logs/.../reproduce_commands.md
+```
+
 Each bundle contains:
 
 - `summary.json`: run metadata, Hive command, versions, test id, and log offsets

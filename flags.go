@@ -15,12 +15,13 @@ type commonFlags struct {
 }
 
 type queryFlags struct {
-	common      commonFlags
-	baseURL     string
-	all         bool
-	showFiles   bool
-	limit       int
-	json        bool
+	common       commonFlags
+	baseURL      string
+	all          bool
+	showFiles    bool
+	showLogPaths bool
+	limit        int
+	json         bool
 	withDuration bool
 }
 
@@ -89,6 +90,12 @@ func parseQueryArgs(args []string) (queryFlags, error) {
 				return qf, err
 			}
 			qf.showFiles = v
+		case "show-log-paths":
+			v, err := parseBoolFlag(name, value, hasValue)
+			if err != nil {
+				return qf, err
+			}
+			qf.showLogPaths = v
 		case "json":
 			v, err := parseBoolFlag(name, value, hasValue)
 			if err != nil {
