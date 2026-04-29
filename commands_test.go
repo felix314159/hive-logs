@@ -13,6 +13,64 @@ import (
 	"time"
 )
 
+func TestCmdQueryWithoutGroupListsGroupsWhenSuiteNotUnique(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/discovery.json":
+			fmt.Fprint(w, `[{"name":"bal"},{"name":"bal-quick"},{"name":"other"}]`)
+		case "/bal/listing.jsonl":
+			writeListingRuns(t, w, []ListingRun{
+				{Name: "eels/consume-engine", Start: time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC), Clients: []string{"besu_main"}},
+			})
+		case "/bal-quick/listing.jsonl":
+			writeListingRuns(t, w, []ListingRun{
+				{Name: "eels/consume-engine", Start: time.Date(2026, 4, 28, 13, 0, 0, 0, time.UTC), Clients: []string{"besu_main"}},
+			})
+		case "/other/listing.jsonl":
+			writeListingRuns(t, w, []ListingRun{
+				{Name: "engine-api", Start: time.Date(2026, 4, 28, 14, 0, 0, 0, time.UTC), Clients: []string{"besu_main"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	err := cmdQuery([]string{"--base-url", server.URL, "suite=eels/consume-engine"})
+	if err == nil {
+		t.Fatal("expected error when suite exists in multiple groups and group= is missing")
+	}
+	for _, want := range []string{"because", "multiple groups", "available groups", "bal", "bal-quick", "other"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not contain %q", err.Error(), want)
+		}
+	}
+}
+
+func TestCmdQueryWithoutGroupErrorsWhenSuiteNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/discovery.json":
+			fmt.Fprint(w, `[{"name":"generic"}]`)
+		case "/generic/listing.jsonl":
+			writeListingRuns(t, w, []ListingRun{
+				{Name: "engine-api", Start: time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC), Clients: []string{"besu_main"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	err := cmdQuery([]string{"--base-url", server.URL, "suite=nope"})
+	if err == nil {
+		t.Fatal("expected error when suite does not exist in any group")
+	}
+	if !strings.Contains(err.Error(), `suite "nope" not found in any group`) {
+		t.Fatalf("error %q missing suite-not-found wording", err.Error())
+	}
+}
+
 func TestCmdQueryClientWithoutSuiteListsAvailableWhenMultiple(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -21,16 +21,39 @@ func cmdQuery(args []string) error {
 	if err != nil {
 		return err
 	}
-	if qf.common.group == "" {
-		if qf.common.suite != "" || qf.common.client != "" {
-			return errors.New("group= is required when suite= or client= is set")
+	if qf.common.group == "" && qf.common.suite == "" {
+		if qf.common.client != "" {
+			return errors.New("group= is required when client= is set without suite=")
 		}
 		return errors.New("group= is required")
 	}
 	ctx := context.Background()
 	client := newClient(qf.baseURL)
 
-	if err := ensureGroupExists(ctx, client, qf.common.group); err != nil {
+	if qf.common.group == "" {
+		groups, err := fetchGroups(ctx, client)
+		if err != nil {
+			return err
+		}
+		matches, err := findGroupsContainingSuite(ctx, client, qf.common.suite, groups)
+		if err != nil {
+			return err
+		}
+		switch len(matches) {
+		case 0:
+			return fmt.Errorf("suite %q not found in any group", qf.common.suite)
+		case 1:
+			qf.common.group = matches[0]
+		default:
+			names := make([]string, len(groups))
+			for i, g := range groups {
+				names[i] = g.Name
+			}
+			sort.Strings(names)
+			return fmt.Errorf("group= is required because suite %q exists in multiple groups. available groups: %s",
+				qf.common.suite, strings.Join(names, ", "))
+		}
+	} else if err := ensureGroupExists(ctx, client, qf.common.group); err != nil {
 		return err
 	}
 
@@ -58,6 +81,51 @@ func cmdQuery(args []string) error {
 		return listSuiteClients(ctx, client, qf.common.group, qf.common.suite, qf.json, qf.withDuration)
 	}
 	return listGroupRuns(ctx, client, qf.common.group, qf)
+}
+
+// findGroupsContainingSuite fetches each group's listing in parallel and
+// returns the sorted names of groups whose listing contains a run with the
+// given suite name. Used to infer group= when the user omitted it but the
+// suite name is unique across groups.
+func findGroupsContainingSuite(ctx context.Context, client *Client, suite string, groups []Group) ([]string, error) {
+	fetchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		matches  []string
+		errOnce  sync.Once
+		firstErr error
+	)
+	for _, g := range groups {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			runs, err := fetchListing(fetchCtx, client, name)
+			if err != nil {
+				errOnce.Do(func() {
+					firstErr = err
+					cancel()
+				})
+				return
+			}
+			for _, s := range availableSuites(runs) {
+				if s == suite {
+					mu.Lock()
+					matches = append(matches, name)
+					mu.Unlock()
+					return
+				}
+			}
+		}(g.Name)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	sort.Strings(matches)
+	return matches, nil
 }
 
 // availableSuites returns the unique sorted suite names present in runs.
@@ -313,7 +381,7 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 				group,
 			)
 		}
-		return fmt.Errorf("suite %q does not exist; available suites for group %q: %s", suite, group, strings.Join(availableSuites(runs), ", "))
+		return fmt.Errorf("suite %q does not exist in group %q; available suites for group %q: %s", suite, group, group, strings.Join(availableSuites(runs), ", "))
 	}
 
 	seen := make(map[string]bool)
@@ -405,7 +473,7 @@ func fetchSuiteClientFailures(ctx context.Context, client *Client, group, suite,
 	}
 	suiteRuns := filterRuns(runs, suite, "", "latest")
 	if len(suiteRuns) == 0 {
-		return fmt.Errorf("suite %q does not exist; available suites for group %q: %s", suite, group, strings.Join(availableSuites(runs), ", "))
+		return fmt.Errorf("suite %q does not exist in group %q; available suites for group %q: %s", suite, group, group, strings.Join(availableSuites(runs), ", "))
 	}
 	matches := filterRuns(runs, suite, clientName, "latest")
 	if len(matches) == 0 {
