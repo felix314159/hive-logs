@@ -109,8 +109,9 @@ func formatHMS(d time.Duration) string {
 const (
 	ansiGreen  = "\x1b[32m"
 	ansiRed    = "\x1b[31m"
+	ansiYellow = "\x1b[33m"
 	ansiGrey   = "\x1b[90m"
-	ansiOrange = "\x1b[38;5;208m"
+	ansiCoral  = "\x1b[38;5;210m"
 	ansiReset  = "\x1b[0m"
 )
 
@@ -181,8 +182,16 @@ func textCell(text string) tableCell {
 	return tableCell{text: text, plain: text}
 }
 
-func passCell(n int) tableCell {
-	return colorIntCell(n, n != 0)
+func passCell(passes, fails int) tableCell {
+	color := ansiYellow
+	switch {
+	case passes == 0:
+		color = ansiRed
+	case fails == 0:
+		color = ansiGreen
+	}
+	plain := strconv.Itoa(passes)
+	return tableCell{text: fmt.Sprintf("%s%d%s", color, passes, ansiReset), plain: plain}
 }
 
 func failCell(n int) tableCell {

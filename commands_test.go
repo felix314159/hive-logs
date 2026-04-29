@@ -345,14 +345,14 @@ func TestPrintBundlesGroupedByFile(t *testing.T) {
 	var buf bytes.Buffer
 	printBundlesGroupedByFile(&buf, bundles, true)
 	out := buf.String()
-	if !strings.Contains(out, ansiRed+"tests/foo.py"+ansiReset+"\n  • "+ansiOrange+"test_a[x]"+ansiReset) {
-		t.Fatalf("missing red foo.py header with orange-labeled bullet:\n%s", out)
+	if !strings.Contains(out, ansiRed+"tests/foo.py"+ansiReset+"\n  • "+ansiCoral+"test_a[x]"+ansiReset) {
+		t.Fatalf("missing red foo.py header with coral-labeled bullet:\n%s", out)
 	}
-	if !strings.Contains(out, "  • "+ansiOrange+"test_a[y]"+ansiReset) {
-		t.Fatalf("missing second foo.py orange-labeled vector:\n%s", out)
+	if !strings.Contains(out, "  • "+ansiCoral+"test_a[y]"+ansiReset) {
+		t.Fatalf("missing second foo.py coral-labeled vector:\n%s", out)
 	}
-	if !strings.Contains(out, ansiRed+"tests/bar.py"+ansiReset+"\n  • "+ansiOrange+"test_z"+ansiReset) {
-		t.Fatalf("missing red bar.py header with orange-labeled bullet:\n%s", out)
+	if !strings.Contains(out, ansiRed+"tests/bar.py"+ansiReset+"\n  • "+ansiCoral+"test_z"+ansiReset) {
+		t.Fatalf("missing red bar.py header with coral-labeled bullet:\n%s", out)
 	}
 	if !strings.Contains(out, ansiGrey+strings.Repeat("─", 80)+ansiReset) {
 		t.Fatalf("missing grey divider between groups:\n%s", out)
@@ -381,8 +381,8 @@ func TestPrintBundlesGroupedByFileHidesLogPathsByDefault(t *testing.T) {
 	var buf bytes.Buffer
 	printBundlesGroupedByFile(&buf, bundles, false)
 	out := buf.String()
-	if !strings.Contains(out, ansiRed+"tests/foo.py"+ansiReset+"\n  • "+ansiOrange+"test_a"+ansiReset) {
-		t.Fatalf("missing red header + orange bullet:\n%s", out)
+	if !strings.Contains(out, ansiRed+"tests/foo.py"+ansiReset+"\n  • "+ansiCoral+"test_a"+ansiReset) {
+		t.Fatalf("missing red header + coral bullet:\n%s", out)
 	}
 	for _, banned := range []string{"hive log:", "client log:", "reproduce:", "logs/foo/a"} {
 		if strings.Contains(out, banned) {
@@ -401,8 +401,8 @@ func TestPrintBundlesGroupedByFileNoFile(t *testing.T) {
 	if strings.Contains(out, "  •") {
 		t.Fatalf("unexpected indentation when no file is present:\n%s", out)
 	}
-	if !strings.HasPrefix(out, "• "+ansiOrange+"client launch"+ansiReset+"\n") {
-		t.Fatalf("expected unindented orange-labeled bullet, got:\n%s", out)
+	if !strings.HasPrefix(out, "• "+ansiCoral+"client launch"+ansiReset+"\n") {
+		t.Fatalf("expected unindented coral-labeled bullet, got:\n%s", out)
 	}
 }
 

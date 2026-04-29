@@ -208,6 +208,14 @@ func TestQueryColorsPassFailCounts(t *testing.T) {
 			Start:    time.Date(2026, 4, 27, 7, 32, 49, 0, time.UTC),
 			FileName: "suite-b.json",
 		},
+		{
+			Name:     "suite-c",
+			Passes:   2,
+			Fails:    0,
+			Clients:  []string{"go-ethereum"},
+			Start:    time.Date(2026, 4, 27, 6, 15, 0, 0, time.UTC),
+			FileName: "suite-c.json",
+		},
 	})
 	defer server.Close()
 
@@ -219,10 +227,11 @@ func TestQueryColorsPassFailCounts(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		ansiGreen + "1" + ansiReset,
+		ansiYellow + "1" + ansiReset,
 		ansiRed + "1" + ansiReset,
 		ansiRed + "0" + ansiReset,
 		ansiGreen + "0" + ansiReset,
+		ansiGreen + "2" + ansiReset,
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("query output does not contain colored count %q:\n%s", want, output)

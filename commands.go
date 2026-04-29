@@ -445,7 +445,7 @@ func listSuiteClients(ctx context.Context, client *Client, group, suite string, 
 	for _, e := range out {
 		row := []tableCell{
 			textCell(e.Client),
-			passCell(e.Passes),
+			passCell(e.Passes, e.Fails),
 			failCell(e.Fails),
 			textCell(formatTime(e.RunStart)),
 		}
@@ -630,7 +630,7 @@ func printBundlesGroupedByFile(w io.Writer, bundles []BundleSummary, showLogPath
 			}
 			hasBullet := label != ""
 			if hasBullet {
-				fmt.Fprintf(w, "%s• %s%s%s\n", bulletIndent, ansiOrange, label, ansiReset)
+				fmt.Fprintf(w, "%s• %s%s%s\n", bulletIndent, ansiCoral, label, ansiReset)
 			}
 			if showLogPaths {
 				pathIndent := bulletIndent
@@ -858,7 +858,7 @@ func listGroupRuns(ctx context.Context, client *Client, group string, qf queryFl
 			textCell(formatTime(run.Start)),
 			textCell(run.Name),
 			textCell(strings.Join(normalizedSortedClients(run.Clients), ",")),
-			passCell(run.Passes),
+			passCell(run.Passes, run.Fails),
 			failCell(run.Fails),
 		}
 		if qf.showFiles {
