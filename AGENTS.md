@@ -1,0 +1,1 @@
+To learn how to use this program `hive-logs` read `./skill/SKILL.md`
