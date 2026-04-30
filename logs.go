@@ -61,6 +61,15 @@ func fetchClientLogs(ctx context.Context, client *Client, ff fetchFlags, match T
 		return infos[i].ID < infos[j].ID
 	})
 
+	// For failed tests, the recorded LogOffsets slice often misses the
+	// startup state and prior client activity needed to diagnose the
+	// failure (e.g. the snap suite's `client launch` test records a tail
+	// slice that drops the entire pre-daemon build/init log). Fetch the
+	// full client log so the bundle has the full context. Passing tests
+	// keep using the slice — there's nothing to diagnose, and the slice
+	// keeps the bundle compact.
+	useSlice := match.Test.SummaryResult.Pass
+
 	var out bytes.Buffer
 	var files []string
 	for _, info := range infos {
@@ -70,7 +79,7 @@ func fetchClientLogs(ctx context.Context, client *Client, ff fetchFlags, match T
 		files = append(files, info.LogFile)
 		fmt.Fprintf(&out, "===== client %s id=%s ip=%s log=%s =====\n", info.Name, info.ID, info.IP, info.LogFile)
 		begin, end := int64(-1), int64(-1)
-		if !ff.fullClient && info.LogOffsets != nil &&
+		if !ff.fullClient && useSlice && info.LogOffsets != nil &&
 			info.LogOffsets.End-info.LogOffsets.Begin >= minClientLogSliceBytes {
 			begin, end = info.LogOffsets.Begin, info.LogOffsets.End
 		}

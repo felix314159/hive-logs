@@ -64,10 +64,13 @@ func TestFetchClientLogsSortsClientsAndUsesOffsets(t *testing.T) {
 	}))
 	defer server.Close()
 
-	match := TestMatch{Test: TestCase{ClientInfo: map[string]ClientInfo{
-		"b": {ID: "2", Name: "second", IP: "10.0.0.2", LogFile: "b.log", LogOffsets: &LogRange{Begin: 200, End: 300}},
-		"a": {ID: "1", Name: "first", IP: "10.0.0.1", LogFile: "a.log", LogOffsets: &LogRange{Begin: 100, End: 200}},
-	}}}
+	match := TestMatch{Test: TestCase{
+		SummaryResult: SummaryResult{Pass: true},
+		ClientInfo: map[string]ClientInfo{
+			"b": {ID: "2", Name: "second", IP: "10.0.0.2", LogFile: "b.log", LogOffsets: &LogRange{Begin: 200, End: 300}},
+			"a": {ID: "1", Name: "first", IP: "10.0.0.1", LogFile: "a.log", LogOffsets: &LogRange{Begin: 100, End: 200}},
+		},
+	}}
 	data, files, err := fetchClientLogs(context.Background(), newClient(server.URL), fetchFlags{common: commonFlags{group: "generic"}}, match)
 	if err != nil {
 		t.Fatal(err)
@@ -116,9 +119,12 @@ func TestFetchClientLogsFallsBackToFullLogForDegenerateOffsets(t *testing.T) {
 	}))
 	defer server.Close()
 
-	match := TestMatch{Test: TestCase{ClientInfo: map[string]ClientInfo{
-		"1": {ID: "1", Name: "first", IP: "10.0.0.1", LogFile: "client.log", LogOffsets: &LogRange{Begin: 37034, End: 37035}},
-	}}}
+	match := TestMatch{Test: TestCase{
+		SummaryResult: SummaryResult{Pass: true},
+		ClientInfo: map[string]ClientInfo{
+			"1": {ID: "1", Name: "first", IP: "10.0.0.1", LogFile: "client.log", LogOffsets: &LogRange{Begin: 37034, End: 37035}},
+		},
+	}}
 	data, _, err := fetchClientLogs(context.Background(), newClient(server.URL), fetchFlags{common: commonFlags{group: "generic"}}, match)
 	if err != nil {
 		t.Fatal(err)
@@ -159,9 +165,12 @@ func TestFetchClientLogsFallsBackToFullLogForTinySliceOfLargeFile(t *testing.T) 
 	}))
 	defer server.Close()
 
-	match := TestMatch{Test: TestCase{ClientInfo: map[string]ClientInfo{
-		"1": {ID: "1", Name: "first", IP: "10.0.0.1", LogFile: "client.log", LogOffsets: &LogRange{Begin: begin, End: end}},
-	}}}
+	match := TestMatch{Test: TestCase{
+		SummaryResult: SummaryResult{Pass: true},
+		ClientInfo: map[string]ClientInfo{
+			"1": {ID: "1", Name: "first", IP: "10.0.0.1", LogFile: "client.log", LogOffsets: &LogRange{Begin: begin, End: end}},
+		},
+	}}
 	data, _, err := fetchClientLogs(context.Background(), newClient(server.URL), fetchFlags{common: commonFlags{group: "generic"}}, match)
 	if err != nil {
 		t.Fatal(err)
@@ -187,9 +196,12 @@ func TestFetchClientLogsFallsBackToFullLogForZeroByteOffsets(t *testing.T) {
 	}))
 	defer server.Close()
 
-	match := TestMatch{Test: TestCase{ClientInfo: map[string]ClientInfo{
-		"1": {ID: "1", Name: "first", IP: "10.0.0.1", LogFile: "client.log", LogOffsets: &LogRange{Begin: 1234, End: 1234}},
-	}}}
+	match := TestMatch{Test: TestCase{
+		SummaryResult: SummaryResult{Pass: true},
+		ClientInfo: map[string]ClientInfo{
+			"1": {ID: "1", Name: "first", IP: "10.0.0.1", LogFile: "client.log", LogOffsets: &LogRange{Begin: 1234, End: 1234}},
+		},
+	}}
 	data, _, err := fetchClientLogs(context.Background(), newClient(server.URL), fetchFlags{common: commonFlags{group: "generic"}}, match)
 	if err != nil {
 		t.Fatal(err)
@@ -198,6 +210,39 @@ func TestFetchClientLogsFallsBackToFullLogForZeroByteOffsets(t *testing.T) {
 		t.Fatalf("expected a single full-log fetch with no Range header, got %v", ranges)
 	}
 	if !strings.Contains(string(data), "complete client log") {
+		t.Fatalf("expected full log content in bundle, got:\n%s", data)
+	}
+}
+
+// For failed tests, the recorded LogOffsets slice is often the tail of a
+// much larger client log and drops the startup state and prior activity
+// needed to diagnose the failure (this is what the snap suite's
+// `client launch` test looks like: a 3.7 KB tail slice of a 23 KB log
+// where the first 19 KB cover the actual besu boot sequence).
+// fetchClientLogs must fetch the full client log for failing tests and
+// ignore the slice entirely.
+func TestFetchClientLogsFetchesFullLogForFailingTest(t *testing.T) {
+	var ranges []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ranges = append(ranges, r.Header.Get("Range"))
+		w.Write([]byte("startup logs ... [Ethereum main loop is up] ... failure context"))
+	}))
+	defer server.Close()
+
+	match := TestMatch{Test: TestCase{
+		SummaryResult: SummaryResult{Pass: false},
+		ClientInfo: map[string]ClientInfo{
+			"1": {ID: "1", Name: "besu_default", IP: "10.0.0.1", LogFile: "client.log", LogOffsets: &LogRange{Begin: 19317, End: 23087}},
+		},
+	}}
+	data, _, err := fetchClientLogs(context.Background(), newClient(server.URL), fetchFlags{common: commonFlags{group: "generic"}}, match)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranges) != 1 || ranges[0] != "" {
+		t.Fatalf("expected a single full-log fetch with no Range header, got %v", ranges)
+	}
+	if !strings.Contains(string(data), "startup logs") {
 		t.Fatalf("expected full log content in bundle, got:\n%s", data)
 	}
 }
